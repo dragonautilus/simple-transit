@@ -1,0 +1,25 @@
+{
+  "package_id": "com.dominikfahrni.simpleeurotransit",
+  "edition": "202601",
+  "name": "Simple euro transit",
+  "version": "0.3.0",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Loads departures, connections and map streets: Switzerland from transport.opendata.ch, Germany and the rest of Europe plus the map from Transitous (api.transitous.org).",
+      "whitelist": [
+        "https://transport.opendata.ch",
+        "https://api.transitous.org"
+      ]
+    },
+    {
+      "name": "location",
+      "desc": "Finds the closest stops and tracks progress along your journey."
+    }
+  ],
+  "supported_languages": [
+    "en"
+  ]
+}

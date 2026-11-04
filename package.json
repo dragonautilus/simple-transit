@@ -1,0 +1,26 @@
+{
+  "name": "simple-euro-transit",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "sim": "node node_modules/@evenrealities/evenhub-simulator/bin/index.js \"http://localhost:5173/?lat=47.3782&lng=8.5402\"",
+    "qr": "evenhub qr --url",
+    "pack": "npm run build && evenhub pack app.json dist -o simple-euro-transit.ehpk --sdk-ver 0.0.16",
+    "icon": "node scripts/make-icon.mjs icon.png"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "^0.0.16"
+  },
+  "devDependencies": {
+    "@evenrealities/evenhub-cli": "^0.2.0",
+    "@evenrealities/evenhub-simulator": "^0.9.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
+  }
+}

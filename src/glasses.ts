@@ -1,0 +1,741 @@
+// Glasses side: departure board of the closest stops, target/connection picker and the in-transit
+// view with the journey line. Rendering goes through serialised bridge calls (see bridge.ts).
+
+import {
+  AppLocationAccuracy,
+  CreateStartUpPageContainer,
+  ImageContainerProperty,
+  ImageRawDataUpdate,
+  ListContainerProperty,
+  ListItemContainerProperty,
+  OsEventTypeList,
+  RebuildPageContainer,
+  TextContainerProperty,
+  TextContainerUpgrade,
+  type EvenAppBridge,
+  type EvenHubEvent,
+} from '@evenrealities/even_hub_sdk'
+import type * as api from './api'
+import { DEFAULT_SETTINGS, loadSettings, loadTargets, serial, type Settings, type Target } from './bridge'
+import { fallbackNetwork, getNetwork, networkFor, swiss, type Network } from './networks'
+import { MAP_H, MAP_W, compass, renderMapPng } from './map/board-map'
+import { checkInExpired, loadCheckIn, saveCheckIn, type CheckIn } from './checkin'
+import {
+  boardRows,
+  connectionItem,
+  hhmm,
+  nextAction,
+  withoutTown,
+  tripHeader,
+  tripSteps,
+  truncate,
+  type BoardRow,
+} from './format'
+import { buildTrip, distanceM, estimateProgress, type Fix, type Trip } from './journey'
+import { fastForward, mockFix, mockTargets, now as clock } from './dev'
+import { HALF_W, LINE_H, dotX, renderProgressPngs } from './progress-image'
+
+type Mode = 'loading' | 'board' | 'targets' | 'connections' | 'transit' | 'confirmStop' | 'message'
+
+const BOARD_ROWS = 7
+const STEP_ROWS = 5
+const BOARD_REFRESH_MS = 30_000
+const TRIP_REFRESH_MS = 60_000
+const TICK_MS = 10_000
+const NEARBY_REQUERY_M = 150
+const BACK = '‹ Back'
+const CONFIRM_ITEMS = ['Continue journey', 'Close app · stay checked in', 'Check out'] as const
+const BOARD_FOOTER = '▲▼ other stops · tap: navigate · 2×: exit'
+const BOARD_COLUMNS = [
+  { name: 'when', x: 0, w: 70, capture: false },
+  { name: 'line', x: 70, w: 100, capture: false },
+  { name: 'dest', x: 170, w: 316, capture: true },
+  { name: 'info', x: 486, w: 90, capture: false },
+] as const
+/** Same columns, narrower, leaving room for the map on the right. */
+const MAP_X = 576 - MAP_W
+const BOARD_COLUMNS_MAP = [
+  { name: 'when', x: 0, w: 52, capture: false },
+  { name: 'line', x: 52, w: 88, capture: false },
+  { name: 'dest', x: 140, w: 190, capture: true },
+  { name: 'info', x: 330, w: 102, capture: false },
+] as const
+const DEST_CHARS = 25
+const DEST_CHARS_MAP = 15
+/** Redraw the map when you moved this far (m). */
+const MAP_REDRAW_M = 10
+/** Walking speed for the "n' walk" hint, m/min. */
+const WALK_M_PER_MIN = 75
+/** In automatic mode, try the next network when the closest stop is further than this (m). */
+const FALLBACK_M = 1500
+
+interface BoardContent {
+  header: string
+  /** Newline-joined cells per column, same order as BOARD_COLUMNS. */
+  columns: string[]
+  /** Text under the map: distance, direction and walking time to the stop. */
+  mapInfo: string
+}
+
+export interface GlassesStatus {
+  mode: Mode
+  summary: string
+  /** Journey you are checked into, if any. */
+  checkIn: { label: string; arrival: number } | null
+}
+
+export class GlassesApp {
+  private mode: Mode = 'loading'
+  private started = false
+  private foreground = true
+
+  private fix: Fix | null = null
+  private nearbyFix: Fix | null = null
+  private stations: api.Location[] = []
+  private stationIdx = 0
+  private board: api.StationboardEntry[] = []
+  private settings: Settings = DEFAULT_SETTINGS
+  /** Network of the departure board (targets carry their own). */
+  private network: Network = swiss
+  /** Board layout currently on screen: with or without map. */
+  private boardWithMap = false
+  private mapKey = ''
+  private mapFix: Fix | null = null
+  private mapBusy = false
+  private boardFetchedAt = 0
+  private boardError = ''
+
+  private targets: Target[] = []
+  private pendingTarget: Target | null = null
+  private options: { trip: Trip; query: api.ConnectionQuery }[] = []
+  /** Checked-in journey: shown in transit mode and restored on the next app start. */
+  private active: CheckIn | null = null
+  private stepOffset = 0
+  private stepScrolledUntil = 0
+  private lastDotX = -1
+  private imageBusy = false
+
+  private timer: ReturnType<typeof setInterval> | null = null
+  private unsubscribers: (() => void)[] = []
+
+  constructor(
+    private bridge: EvenAppBridge,
+    private onStatus: (s: GlassesStatus) => void = () => {},
+  ) {}
+
+  async start(): Promise<void> {
+    this.targets = await loadTargets()
+    if (this.targets.length === 0) this.targets = mockTargets
+    this.settings = await loadSettings()
+    // Checked in: open straight into the journey from the stored timetable, no GPS/network wait
+    const saved = await loadCheckIn()
+    const resume = saved && !checkInExpired(saved, clock(), null) ? saved : null
+    if (saved && !resume) await saveCheckIn(null)
+    const first = resume
+      ? { containerTotalNum: 4, ...this.transitLayout() }
+      : { containerTotalNum: 3, textObject: this.messageTexts('Simple euro transit', 'Locating closest stops…', ' ') }
+    await serial(() => this.bridge.createStartUpPageContainer(new CreateStartUpPageContainer(first)))
+    this.started = true
+    this.unsubscribers.push(this.bridge.onEvenHubEvent((e) => void this.onEvent(e)))
+    const resumed = !!resume
+    if (resume) {
+      this.active = resume
+      this.enterTransitMode()
+      await this.renderTransit(true)
+      // Delays may have changed while the app was closed
+      void this.refreshTrip().then(() => this.renderTransit(true))
+    }
+    this.unsubscribers.push(
+      this.bridge.onAppLocationChanged((l) => {
+        if (mockFix) return
+        this.fix = { lat: l.latitude, lng: l.longitude, accuracy: l.accuracy, timestamp: l.timestamp ?? clock() }
+        void this.onFix()
+      }),
+    )
+    await this.startLocation()
+    const firstFix = mockFix
+      ? { latitude: mockFix.lat, longitude: mockFix.lng, accuracy: mockFix.accuracy }
+      : await this.bridge.getAppLocation({ accuracy: AppLocationAccuracy.High, timeoutMs: 8000 }).catch(() => null)
+    if (firstFix) {
+      this.fix = { lat: firstFix.latitude, lng: firstFix.longitude, accuracy: firstFix.accuracy, timestamp: clock() }
+      await this.onFix()
+    } else if (!this.fix && !resumed) {
+      await this.showMessage('No GPS fix yet', 'Waiting for location…\nCheck that the Even app may use your location.', 'loading')
+    }
+    this.timer = setInterval(() => void this.tick(), TICK_MS)
+  }
+
+  /** Location updates stop when the WebView is suspended, so this also runs on every resume. */
+  private async startLocation() {
+    if (mockFix) return
+    await this.bridge
+      .startAppLocationUpdates({ accuracy: AppLocationAccuracy.High, intervalMs: 5000, distanceFilter: 10 })
+      .catch(() => false)
+  }
+
+  /** Check out from the phone app. */
+  async checkOut(): Promise<void> {
+    if (this.active) await this.endTransit()
+  }
+
+  /** Called by the companion UI when settings were changed. */
+  async setSettings(settings: Settings): Promise<void> {
+    const networkChanged = settings.network !== this.settings.network
+    this.settings = settings
+    if (networkChanged) {
+      this.nearbyFix = null
+      if (this.showsBoard()) await this.loadNearby()
+    } else if (this.mode === 'board' && this.boardWithMap !== settings.map) {
+      this.mode = 'loading' // forces a rebuild with the other layout
+      await this.renderBoard()
+    }
+  }
+
+  /** Called by the companion UI when targets were edited. */
+  async setTargets(targets: Target[]): Promise<void> {
+    this.targets = targets
+    if (this.mode === 'targets') await this.showTargets()
+  }
+
+  private stop() {
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
+    this.unsubscribers.forEach((u) => u())
+    this.unsubscribers = []
+    void this.bridge.stopAppLocationUpdates().catch(() => false)
+  }
+
+  private status(summary: string) {
+    const a = this.active
+    this.onStatus({ mode: this.mode, summary, checkIn: a ? { label: a.target.label, arrival: a.trip.end } : null })
+  }
+
+  // ---------- Layout helpers ----------
+
+  private text(id: number, name: string, y: number, h: number, content: string, capture = false, extra = {}) {
+    return new TextContainerProperty({
+      xPosition: 0,
+      yPosition: y,
+      width: 576,
+      height: h,
+      containerID: id,
+      containerName: name,
+      content: content || ' ',
+      isEventCapture: capture ? 1 : 0,
+      borderWidth: 0,
+      paddingLength: 4,
+      ...extra,
+    })
+  }
+
+  private messageTexts(header: string, body: string, footer: string) {
+    return [
+      this.text(1, 'hdr', 0, 36, header),
+      this.text(2, 'body', 36, 216, body, true),
+      this.text(3, 'foot', 252, 36, footer, false, { textColor: 2 }),
+    ]
+  }
+
+  /** Departure table: one text container per column so the columns line up despite the
+   *  proportional firmware font. All columns share y and height, so rows align. */
+  private boardTexts(c: BoardContent, withMap: boolean) {
+    const col = (id: number, name: string, x: number, w: number, content: string, capture = false) =>
+      this.text(id, name, 36, 216, content, capture, { xPosition: x, width: w })
+    const columns = withMap ? BOARD_COLUMNS_MAP : BOARD_COLUMNS
+    const texts = [
+      this.text(1, 'hdr', 0, 36, c.header),
+      ...columns.map((k, i) => col(i + 2, k.name, k.x, k.w, c.columns[i], k.capture)),
+      this.text(6, 'foot', 252, 36, BOARD_FOOTER, false, { textColor: 2 }),
+    ]
+    if (withMap) {
+      texts.push(this.text(7, 'mapinfo', 36 + MAP_H + 2, 216 - MAP_H - 2, c.mapInfo, false, { xPosition: MAP_X, width: MAP_W }))
+    }
+    return texts
+  }
+
+  private mapImage() {
+    return new ImageContainerProperty({ xPosition: MAP_X, yPosition: 38, width: MAP_W, height: MAP_H, containerID: 8, containerName: 'map' })
+  }
+
+  private async rebuild(page: Partial<RebuildPageContainer>) {
+    if (!this.started) return
+    const total = (page.textObject?.length ?? 0) + (page.listObject?.length ?? 0) + (page.imageObject?.length ?? 0)
+    await serial(() => this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: total, ...page })))
+  }
+
+  private async upgrade(id: number, name: string, content: string) {
+    if (!this.started || !this.foreground) return
+    await serial(() =>
+      this.bridge.textContainerUpgrade(
+        new TextContainerUpgrade({ containerID: id, containerName: name, content: content || ' ', contentOffset: 0, contentLength: 0 }),
+      ),
+    ).catch(() => false)
+  }
+
+  /** Full-screen text page. 'loading' switches to the board by itself once departures arrive. */
+  private async showMessage(header: string, body: string, mode: 'message' | 'loading' = 'message') {
+    const sameLayout = this.mode === 'message' || this.mode === 'loading'
+    this.mode = mode
+    const footer = mode === 'message' ? 'tap: back' : ' '
+    if (!sameLayout) await this.rebuild({ textObject: this.messageTexts(header, body, footer) })
+    else {
+      await this.upgrade(1, 'hdr', header)
+      await this.upgrade(2, 'body', body)
+      await this.upgrade(3, 'foot', footer)
+    }
+  }
+
+  private async showList(header: string, items: string[]) {
+    const names = items.map((s) => truncate(s, 60)).slice(0, 20)
+    await this.rebuild({
+      textObject: [this.text(1, 'hdr', 0, 40, header)],
+      listObject: [
+        new ListContainerProperty({
+          xPosition: 0,
+          yPosition: 44,
+          width: 576,
+          height: Math.min(244, Math.max(2, names.length) * 40),
+          containerID: 2,
+          containerName: 'list',
+          isEventCapture: 1,
+          borderWidth: 0,
+          paddingLength: 4,
+          itemContainer: new ListItemContainerProperty({ itemCount: names.length, itemWidth: 0, isItemSelectBorderEn: 1, itemName: names }),
+        }),
+      ],
+    })
+  }
+
+  // ---------- Departure board ----------
+
+  private async onFix() {
+    if (!this.fix) return
+    if (this.mode === 'transit') return this.renderTransit()
+    const moved = !this.nearbyFix || distanceM(this.nearbyFix, this.fix) > NEARBY_REQUERY_M
+    if (moved) await this.loadNearby()
+    else if (this.mode === 'board' && this.boardWithMap && (!this.mapFix || distanceM(this.mapFix, this.fix) >= MAP_REDRAW_M)) {
+      await this.renderBoard()
+    }
+  }
+
+  private async loadNearby() {
+    if (!this.fix) return
+    const fix = this.fix
+    try {
+      const prevId = this.stations[this.stationIdx]?.id
+      let network = networkFor(this.settings.network, fix.lat, fix.lng)
+      let stations = await network.nearbyStations(fix.lat, fix.lng)
+      const fallback = this.settings.network === 'auto' ? fallbackNetwork(network, fix.lat, fix.lng) : null
+      if (fallback && (stations.length === 0 || (stations[0].distance ?? 0) > FALLBACK_M)) {
+        const other = await fallback.nearbyStations(fix.lat, fix.lng).catch(() => [])
+        if (other.length > 0 && (stations.length === 0 || (other[0].distance ?? Infinity) < (stations[0].distance ?? Infinity))) {
+          network = fallback
+          stations = other
+        }
+      }
+      this.network = network
+      this.stations = stations
+      this.nearbyFix = fix
+      const keep = this.stations.findIndex((s) => s.id === prevId)
+      this.stationIdx = keep >= 0 ? keep : 0
+      await this.loadBoard()
+    } catch {
+      this.boardError = 'Offline · retrying'
+      if (this.showsBoard()) await this.renderBoard()
+    }
+  }
+
+  /** Board is on screen, or the startup/loading page that the board replaces. */
+  private showsBoard() {
+    return this.mode === 'board' || this.mode === 'loading'
+  }
+
+  private async loadBoard() {
+    const station = this.stations[this.stationIdx]
+    if (!station?.id) {
+      this.board = []
+      return this.showsBoard() ? this.renderBoard() : undefined
+    }
+    try {
+      this.board = await this.network.stationboard(station.id, 15)
+      this.boardFetchedAt = clock()
+      this.boardError = ''
+    } catch {
+      this.boardError = 'Offline · retrying'
+    }
+    if (this.showsBoard()) await this.renderBoard()
+  }
+
+  /** Live distance (m) from the current fix to a stop, falling back to the API's value. */
+  private distanceTo(station: api.Location): number | null {
+    const c = station.coordinate
+    if (this.fix && c?.x != null && c.y != null) return distanceM(this.fix, { lat: c.x, lng: c.y })
+    return station.distance ?? null
+  }
+
+  private boardContent(now: number, placeholder?: string): BoardContent {
+    const station = this.stations[this.stationIdx]
+    if (!station) {
+      return { header: 'No stops nearby', columns: ['', '', 'No public transport stop found around you.', ''], mapInfo: ' ' }
+    }
+    const metres = this.distanceTo(station)
+    const dist = metres != null ? ` · ${Math.round(metres)} m` : ''
+    const page = this.stations.length > 1 ? `  ${this.stationIdx + 1}/${this.stations.length}` : ''
+    const header = `${truncate(withoutTown(station.name ?? '?'), 30)}${dist}${page}   ${hhmm(now)}`
+    const c = station.coordinate
+    const mapInfo =
+      metres != null && this.fix && c?.x != null && c.y != null
+        ? `${Math.round(metres)} m ${compass(this.fix, { lat: c.x, lng: c.y })}\n${Math.max(1, Math.round(metres / WALK_M_PER_MIN))}' walk`
+        : ' '
+    const destChars = this.settings.map ? DEST_CHARS_MAP : DEST_CHARS
+    const rows = placeholder ? [] : boardRows(this.board, station.name ?? '', now, BOARD_ROWS, destChars)
+    const note = placeholder ?? (rows.length === 0 ? 'No upcoming departures.' : '')
+    const extra = [note, this.boardError].filter(Boolean)
+    const column = (k: keyof BoardRow) =>
+      [...rows.map((r) => r[k]), ...extra.map((e) => (k === 'dest' ? e : ' '))].slice(0, BOARD_ROWS).join('\n')
+    return { header, columns: [column('when'), column('line'), column('dest'), column('info')], mapInfo }
+  }
+
+  private async renderBoard(placeholder?: string) {
+    const c = this.boardContent(clock(), placeholder)
+    const withMap = this.settings.map
+    if (this.mode !== 'board' || this.boardWithMap !== withMap) {
+      this.mode = 'board'
+      this.boardWithMap = withMap
+      this.mapKey = ''
+      await this.rebuild({ textObject: this.boardTexts(c, withMap), ...(withMap ? { imageObject: [this.mapImage()] } : {}) })
+    } else {
+      await this.upgrade(1, 'hdr', c.header)
+      for (const [i, k] of BOARD_COLUMNS.entries()) await this.upgrade(i + 2, k.name, c.columns[i])
+      if (withMap) await this.upgrade(7, 'mapinfo', c.mapInfo)
+    }
+    if (withMap) void this.sendMap()
+    const net = this.network === swiss ? '' : ` (${this.network.name})`
+    this.status(`Departures · ${this.stations[this.stationIdx]?.name ?? 'locating'}${net}`)
+  }
+
+  /** Sends the map image when the stop list, the selected stop or your position changed. */
+  private async sendMap() {
+    if (this.mapBusy || !this.foreground || this.mode !== 'board' || !this.boardWithMap) return
+    const station = this.stations[this.stationIdx]
+    const moved = !this.mapFix || !this.fix || distanceM(this.mapFix, this.fix) >= MAP_REDRAW_M
+    const key = `${this.stations.map((s) => s.id).join(',')}#${this.stationIdx}`
+    if (!station || (key === this.mapKey && !moved)) return
+    this.mapBusy = true
+    const fix = this.fix
+    try {
+      const png = await renderMapPng({
+        me: fix ? { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy } : null,
+        stations: this.stations
+          .map((s) => s.coordinate)
+          .map((c) => (c?.x != null && c.y != null ? { lat: c.x, lng: c.y } : { lat: NaN, lng: NaN })),
+        selected: this.stationIdx,
+      })
+      if (this.mode !== 'board' || !this.boardWithMap) return
+      await serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: 'map', imageData: png })), 10_000)
+      this.mapKey = key
+      this.mapFix = fix
+    } catch {
+      this.mapKey = '' // retry on the next tick
+    } finally {
+      this.mapBusy = false
+    }
+  }
+
+  private async switchStation(delta: number) {
+    if (this.stations.length < 2) return
+    this.stationIdx = (this.stationIdx + delta + this.stations.length) % this.stations.length
+    this.board = []
+    await this.renderBoard('Loading departures…')
+    await this.loadBoard()
+  }
+
+  // ---------- Target + connection picker ----------
+
+  private async showTargets() {
+    this.mode = 'targets'
+    if (this.targets.length === 0) {
+      await this.showList('No targets yet · add them in the phone app', [BACK])
+    } else {
+      await this.showList('Navigate to…', [...this.targets.map((t) => `→ ${t.label}`), BACK])
+    }
+    this.status('Choosing a target')
+  }
+
+  private async pickTarget(target: Target) {
+    if (!this.fix) {
+      await this.showMessage('No GPS fix', 'Your position is needed to plan the trip.\nTap to go back.')
+      return
+    }
+    this.pendingTarget = target
+    await this.showMessage(`→ ${target.label}`, 'Searching connections…')
+    const now = new Date(clock())
+    const query: api.ConnectionQuery = {
+      from: `${this.fix.lat.toFixed(6)},${this.fix.lng.toFixed(6)}`,
+      to: target.query,
+      date: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
+      time: hhmm(now.getTime()),
+      toName: target.label,
+    }
+    try {
+      const conns = await getNetwork(target.network).connections(query, 5)
+      this.options = conns.map((c) => ({ trip: buildTrip(c), query })).filter((o) => o.trip.legs.length > 0)
+    } catch {
+      this.options = []
+    }
+    if (this.options.length === 0) {
+      await this.showMessage(`→ ${target.label}`, 'No connection found (or offline).\nTap to go back.')
+      return
+    }
+    this.mode = 'connections'
+    await this.showList(`→ ${truncate(target.label, 24)} · pick a connection`, [
+      ...this.options.map((o) => connectionItem(o.trip)),
+      BACK,
+    ])
+    this.status(`Choosing a connection to ${target.label}`)
+  }
+
+  private async startTransit(option: { trip: Trip; query: api.ConnectionQuery }) {
+    if (!this.pendingTarget) return
+    const first = option.trip.legs[0]
+    // Re-query from the same origin at the trip's departure time so refreshes return this connection
+    const dep = new Date(first.from.scheduled)
+    const query: api.ConnectionQuery = {
+      ...option.query,
+      date: `${dep.getFullYear()}-${String(dep.getMonth() + 1).padStart(2, '0')}-${String(dep.getDate()).padStart(2, '0')}`,
+      time: hhmm(first.from.scheduled),
+    }
+    // Choosing a connection checks you into it
+    this.active = { target: this.pendingTarget, query, trip: option.trip, checkedInAt: clock(), fetchedAt: clock() }
+    await saveCheckIn(this.active)
+    fastForward()
+    await this.showTransit()
+  }
+
+  private transitLayout() {
+    return {
+      textObject: [
+        this.text(1, 'hdr', 0, 64, ' '),
+        this.text(2, 'steps', 136, 152, ' ', true, { paddingLength: 2 }),
+      ],
+      imageObject: [
+        new ImageContainerProperty({ xPosition: 0, yPosition: 64, width: HALF_W, height: LINE_H, containerID: 3, containerName: 'lineL' }),
+        new ImageContainerProperty({ xPosition: HALF_W, yPosition: 64, width: HALF_W, height: LINE_H, containerID: 4, containerName: 'lineR' }),
+      ],
+    }
+  }
+
+  private enterTransitMode() {
+    this.stepOffset = -1
+    this.lastDotX = -1
+    this.mode = 'transit'
+  }
+
+  /** Puts the checked-in journey on screen. */
+  private async showTransit() {
+    if (!this.active) return this.renderBoard()
+    this.enterTransitMode()
+    await this.rebuild(this.transitLayout())
+    await this.renderTransit(true)
+  }
+
+  // ---------- In transit ----------
+
+  private async refreshTrip() {
+    const a = this.active
+    if (!a) return
+    try {
+      const conns = await getNetwork(a.target.network).connections(a.query, 6)
+      const match = conns.map(buildTrip).find((t) => t.signature === a.trip.signature)
+      if (match) a.trip = match
+      a.fetchedAt = clock()
+      if (this.active === a) await saveCheckIn(a)
+    } catch {
+      // keep last known timetable; progress continues by time
+    }
+  }
+
+  private async renderTransit(forceImage = false) {
+    const a = this.active
+    if (!a || this.mode !== 'transit') return
+    const now = clock()
+    const p = estimateProgress(a.trip, now, this.fix)
+
+    const action = p.arrived ? `${nextAction(a.trip, p, now)} Tap: check out` : nextAction(a.trip, p, now)
+    const header = `${tripHeader(a.target.label, a.trip, now)}\n${truncate(action, 52)}`
+    const { lines, currentLine } = tripSteps(a.trip, p)
+    // Text must fit the container; overflowing text scrolls inside the firmware and eats swipes
+    const rows = lines.length > STEP_ROWS ? STEP_ROWS - 1 : STEP_ROWS
+    const maxOffset = Math.max(0, lines.length - rows)
+    // Follow the current step unless the user scrolled recently
+    if (this.stepOffset < 0 || now > this.stepScrolledUntil) this.stepOffset = currentLine
+    this.stepOffset = Math.min(Math.max(0, this.stepOffset), maxOffset)
+    let steps = lines.slice(this.stepOffset, this.stepOffset + rows).join('\n')
+    if (maxOffset > 0) {
+      const up = this.stepOffset > 0 ? '▲' : '△'
+      const down = this.stepOffset < maxOffset ? '▼' : '▽'
+      steps += `\n${' '.repeat(40)}${up}${down}`
+    }
+
+    await this.upgrade(1, 'hdr', header)
+    await this.upgrade(2, 'steps', steps)
+    this.status(`${a.target.label}: ${nextAction(a.trip, p, now)}`)
+
+    const x = Math.round(dotX(a.trip, p))
+    if (forceImage || Math.abs(x - this.lastDotX) >= 3) {
+      this.lastDotX = x
+      void this.sendImages(a.trip, p)
+    }
+  }
+
+  private async sendImages(trip: Trip, p: ReturnType<typeof estimateProgress>) {
+    if (this.imageBusy || !this.foreground) {
+      this.lastDotX = -1 // retry on next tick
+      return
+    }
+    this.imageBusy = true
+    try {
+      const [left, right] = await renderProgressPngs(trip, p)
+      await serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 3, containerName: 'lineL', imageData: left })), 10_000)
+      await serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 4, containerName: 'lineR', imageData: right })), 10_000)
+    } catch {
+      this.lastDotX = -1
+    } finally {
+      this.imageBusy = false
+    }
+  }
+
+  /** Check out: forget the journey and go back to the departure board. */
+  private async endTransit() {
+    this.active = null
+    this.pendingTarget = null
+    await saveCheckIn(null)
+    await this.renderBoard()
+    await this.loadNearby()
+  }
+
+  // ---------- Timer ----------
+
+  private async tick() {
+    if (!this.foreground) return
+    const now = clock()
+    if (this.mode === 'board') {
+      if (now - this.boardFetchedAt > BOARD_REFRESH_MS) await this.loadBoard()
+      else await this.renderBoard()
+    } else if (this.mode === 'transit' && this.active) {
+      if (checkInExpired(this.active, now, this.fix)) return this.endTransit()
+      if (now - this.active.fetchedAt > TRIP_REFRESH_MS) {
+        await this.refreshTrip()
+        await this.renderTransit(true)
+      } else {
+        await this.renderTransit()
+      }
+    }
+  }
+
+  // ---------- Input ----------
+
+  private async onEvent(e: EvenHubEvent) {
+    const sys = e.sysEvent
+    if (sys) {
+      const type = sys.eventType ?? OsEventTypeList.CLICK_EVENT
+      switch (type) {
+        case OsEventTypeList.FOREGROUND_ENTER_EVENT:
+          this.foreground = true
+          this.lastDotX = -1
+          await this.startLocation()
+          return this.tick()
+        case OsEventTypeList.FOREGROUND_EXIT_EVENT:
+          this.foreground = false
+          return
+        case OsEventTypeList.ABNORMAL_EXIT_EVENT:
+        case OsEventTypeList.SYSTEM_EXIT_EVENT:
+          return this.stop()
+        case OsEventTypeList.CLICK_EVENT:
+          return this.onClick()
+        case OsEventTypeList.DOUBLE_CLICK_EVENT:
+          return this.onDoubleClick()
+      }
+      return
+    }
+    if (e.textEvent) {
+      const type = e.textEvent.eventType
+      if (type === OsEventTypeList.SCROLL_TOP_EVENT) return this.onScroll(-1)
+      if (type === OsEventTypeList.SCROLL_BOTTOM_EVENT) return this.onScroll(1)
+      if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) return this.onDoubleClick()
+      return
+    }
+    if (e.listEvent) {
+      const type = e.listEvent.eventType ?? OsEventTypeList.CLICK_EVENT
+      if (type === OsEventTypeList.DOUBLE_CLICK_EVENT) return this.onDoubleClick()
+      if (type === OsEventTypeList.CLICK_EVENT) return this.onListSelect(e.listEvent.currentSelectItemIndex ?? 0)
+    }
+  }
+
+  private async onClick() {
+    switch (this.mode) {
+      case 'board':
+        return this.showTargets()
+      case 'message':
+        return this.renderBoard()
+      case 'transit':
+        if (this.active?.trip && estimateProgress(this.active.trip, clock(), this.fix).arrived) {
+          return this.endTransit()
+        }
+        await this.refreshTrip()
+        return this.renderTransit(true)
+    }
+  }
+
+  private async onDoubleClick() {
+    switch (this.mode) {
+      case 'loading':
+      case 'board':
+      case 'message':
+        await serial(() => this.bridge.shutDownPageContainer(1))
+        return
+      case 'targets':
+        return this.renderBoard()
+      case 'connections':
+        return this.showTargets()
+      case 'transit':
+        this.mode = 'confirmStop'
+        await this.showList(`Checked in → ${truncate(this.active?.target.label ?? '', 30)}`, [...CONFIRM_ITEMS])
+        return
+      case 'confirmStop':
+        return this.showTransit()
+    }
+  }
+
+  private async onScroll(dir: number) {
+    if (this.mode === 'board') return this.switchStation(dir)
+    if (this.mode === 'transit') {
+      this.stepOffset = Math.max(0, this.stepOffset + dir * (STEP_ROWS - 1))
+      this.stepScrolledUntil = clock() + 30_000
+      return this.renderTransit()
+    }
+  }
+
+  private async onListSelect(index: number) {
+    if (this.mode === 'targets') {
+      const t = this.targets[index]
+      return t ? this.pickTarget(t) : this.renderBoard()
+    }
+    if (this.mode === 'connections') {
+      const o = this.options[index]
+      return o ? this.startTransit(o) : this.showTargets()
+    }
+    if (this.mode === 'confirmStop') {
+      if (index === 1) return this.closeApp()
+      if (index === 2) return this.endTransit()
+      return this.showTransit()
+    }
+  }
+
+  /** Leave the app but stay checked in; the next start opens the journey again. */
+  private async closeApp() {
+    if (this.active) await saveCheckIn(this.active)
+    this.stop()
+    await serial(() => this.bridge.shutDownPageContainer(0)).catch(() => false)
+  }
+}
