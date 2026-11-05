@@ -73,6 +73,24 @@ describe('estimateProgress (GPS)', () => {
     expect(Math.abs(p.time - stop.time)).toBeLessThan(60_000)
   })
 
+  it('keeps the clock position when GPS only differs a little (noise)', () => {
+    const leg = rides.find((l) => l.stops.length > 2)!
+    const stop = leg.stops[1]
+    const now = stop.time + 30_000
+    const p = estimateProgress(trip, now, { ...stop.coord!, accuracy: 20, timestamp: now })
+    expect(p.source).toBe('gps')
+    expect(p.time).toBe(now)
+  })
+
+  it('ignores inaccurate fixes', () => {
+    const leg = rides.find((l) => l.stops.length > 2)!
+    const stop = leg.stops[1]
+    const now = stop.time + 5 * 60_000
+    const p = estimateProgress(trip, now, { ...stop.coord!, accuracy: 400, timestamp: now })
+    expect(p.source).toBe('time')
+    expect(p.time).toBe(now)
+  })
+
   it('ignores GPS far away from the route', () => {
     const now = (rides[1].from.time + rides[1].to.time) / 2
     const p = estimateProgress(trip, now, { lat: 46.0, lng: 6.0, accuracy: 10, timestamp: now })

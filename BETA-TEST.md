@@ -18,7 +18,7 @@ scripts/beta-release.sh "what changed"
 ```
 
 It type-checks, runs the tests, builds `icon.png` and `simple-euro-transit.ehpk`, creates the app (first run) or uploads a new version, promotes it to **beta** and invites the tester.
-For every later build raise `"version"` in `app.json` first (currently `0.3.1`, next e.g. `0.3.2`); a version number can only be uploaded once.
+For every later build raise `"version"` in `app.json` first (currently `0.3.2`, next e.g. `0.3.3`); a version number can only be uploaded once.
 
 Then manually:
 
@@ -50,6 +50,8 @@ Speed (0.3.1)
 - [ ] Second start within 20 min: last board appears at once, departures refresh within a second or two.
 - [ ] First start / after a long break: board appears within a few seconds (coarse position first).
 - [ ] Swiping between stops is instant (except the first seconds after start).
+- [ ] Journey line appears together with the text (also when reopening a checked-in journey), not seconds later.
+- [ ] Dot moves steadily by the clock; with GPS it only jumps when the train is clearly late/early (≥ 1.5 min).
 - [ ] Standing still: taps react immediately, map is not redrawn all the time.
 
 Departure board (start from the **glasses menu**)
@@ -59,6 +61,7 @@ Departure board (start from the **glasses menu**)
 - [ ] Walk 200 m: the stop list updates.
 - [ ] No scrollbar on the right of any column (text fits).
 - [ ] Map: hollow square = selected stop, filled dot = you, small rings = other nearby stops, dotted line between you and the stop.
+- [ ] Swiping: text under the map reads "Map updating…" until the new map arrives, then the walking time again; the stop number in the map corner (e.g. 2/6) matches the header.
 - [ ] Map follows when you walk (redraws every ~25 m, at most every 15 s) and when you swipe to another stop; "n m NE · n' walk" under it is right.
 - [ ] Streets are readable on the glasses (not too bright/dim). Map without streets = tile download failed (still shows stops and you).
 

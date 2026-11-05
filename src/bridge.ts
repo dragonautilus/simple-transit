@@ -14,22 +14,54 @@ export function getBridge(timeoutMs = 4000): Promise<EvenAppBridge | null> {
   return bridgePromise
 }
 
-let queue: Promise<unknown> = Promise.resolve()
-
 /** Bridge traffic counters (logged with ?perf=1). */
 export const bridgeStats = { calls: 0, busyMs: 0 }
 
-export function serial<T>(fn: () => Promise<T>, timeoutMs = 6000): Promise<T> {
-  const run = queue.then(() => {
-    const start = performance.now()
-    bridgeStats.calls++
-    return Promise.race([
-      fn(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('bridge call timed out')), timeoutMs)),
-    ]).finally(() => (bridgeStats.busyMs += performance.now() - start))
+interface Job {
+  run: () => Promise<void>
+}
+// Two lanes, one call at a time: page changes, text and storage go first; images (slow
+// Bluetooth transfers) only when nothing else waits, so text and taps never queue behind them.
+const lanes: { high: Job[]; low: Job[] } = { high: [], low: [] }
+let running = false
+
+function pump() {
+  if (running) return
+  const job = lanes.high.shift() ?? lanes.low.shift()
+  if (!job) return
+  running = true
+  void job.run().finally(() => {
+    running = false
+    pump()
   })
-  queue = run.catch(() => undefined)
-  return run
+}
+
+export function serial<T>(fn: () => Promise<T>, timeoutMs = 6000, priority: 'high' | 'low' = 'high'): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    lanes[priority].push({
+      run: async () => {
+        const start = performance.now()
+        bridgeStats.calls++
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+          resolve(
+            await Promise.race([
+              fn(),
+              new Promise<never>((_, rej) => {
+                timer = setTimeout(() => rej(new Error('bridge call timed out')), timeoutMs)
+              }),
+            ]),
+          )
+        } catch (err) {
+          reject(err)
+        } finally {
+          clearTimeout(timer)
+          bridgeStats.busyMs += performance.now() - start
+        }
+      },
+    })
+    pump()
+  })
 }
 
 // ---------- Persistent settings ----------

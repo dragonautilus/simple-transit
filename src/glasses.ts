@@ -32,7 +32,7 @@ import {
   type BoardRow,
 } from './format'
 import { buildTrip, distanceM, estimateProgress, type Fix, type Trip } from './journey'
-import { fastForward, jitterM, mark, mockFix, mockTargets, perf, now as clock } from './dev'
+import { fastForward, jitterM, mark, mockFix, mockTargets, perf, slowImageMs, now as clock } from './dev'
 import { HALF_W, LINE_H, dotX, renderProgressPngs } from './progress-image'
 
 type Mode = 'loading' | 'board' | 'targets' | 'connections' | 'transit' | 'confirmStop' | 'message'
@@ -42,6 +42,8 @@ const STEP_ROWS = 5
 const BOARD_REFRESH_MS = 30_000
 const TRIP_REFRESH_MS = 60_000
 const TICK_MS = 10_000
+/** Journey line updates while riding: at most this often (forced updates always go out). */
+const IMAGE_MIN_INTERVAL_MS = 8_000
 const NEARBY_REQUERY_M = 150
 const BACK = '‹ Back'
 const CONFIRM_ITEMS = ['Continue journey', 'Close app · stay checked in', 'Check out'] as const
@@ -129,6 +131,9 @@ export class GlassesApp {
   private stepScrolledUntil = 0
   private lastDotX = -1
   private imageBusy = false
+  private imagePending = false
+  private imageSentAt = 0
+  private lastRing = false
 
   private timer: ReturnType<typeof setInterval> | null = null
   private unsubscribers: (() => void)[] = []
@@ -163,15 +168,17 @@ export class GlassesApp {
     this.started = true
     if (snapshot) {
       if (this.boardWithMap) void this.sendMap(true)
-      void this.loadBoard()
+      void this.loadBoard().then(() => this.prefetchBoards())
     }
-    void this.loadStored(!!resume)
+    // Read after the first journey frame was queued, not in front of it
+    if (!resume) void this.loadStored(false)
     this.unsubscribers.push(this.bridge.onEvenHubEvent((e) => void this.onEvent(e)))
     const resumed = !!resume
     if (resume) {
       this.active = resume
       this.enterTransitMode()
       await this.renderTransit(true)
+      void this.loadStored(true)
       // Delays may have changed while the app was closed
       void this.refreshTrip().then(() => this.renderTransit(true))
     }
@@ -507,10 +514,11 @@ export class GlassesApp {
     const page = this.stations.length > 1 ? `  ${this.stationIdx + 1}/${this.stations.length}` : ''
     const header = `${truncate(withoutTown(station.name ?? '?'), 30)}${dist}${page}   ${hhmm(now)}`
     const c = station.coordinate
-    const mapInfo =
-      metres != null && this.fix && c?.x != null && c.y != null
-        ? `${Math.round(metres)} m ${compass(this.fix, { lat: c.x, lng: c.y })}\n${Math.max(1, Math.round(metres / WALK_M_PER_MIN))}' walk`
-        : ' '
+    const where = metres != null && this.fix && c?.x != null && c.y != null ? `${Math.round(metres)} m ${compass(this.fix, { lat: c.x, lng: c.y })}` : ' '
+    const walk = metres != null ? `${Math.max(1, Math.round(metres / WALK_M_PER_MIN))}' walk` : ' '
+    // The image takes a few seconds over Bluetooth; text is instant, so it says when the map
+    // still shows the previous stop
+    const mapInfo = `${where}\n${this.mapKey === this.mapKeyNow() ? walk : 'Map updating…'}`
     const destChars = this.settings.map ? DEST_CHARS_MAP : DEST_CHARS
     const rows = placeholder ? [] : boardRows(this.board, station.name ?? '', now, BOARD_ROWS, destChars)
     const note = placeholder ?? (rows.length === 0 ? 'No upcoming departures.' : '')
@@ -549,7 +557,7 @@ export class GlassesApp {
       return
     }
     const station = this.stations[this.stationIdx]
-    const key = `${this.stations.map((s) => s.id).join(',')}#${this.stationIdx}`
+    const key = this.mapKeyNow()
     const goodFix = !!this.fix && (this.fix.accuracy ?? 0) <= MAP_MAX_ACCURACY_M
     const moved = goodFix && (!this.mapFix || distanceM(this.mapFix, this.fix!) >= MAP_REDRAW_M)
     const due = clock() - this.mapSentAt >= MAP_MIN_INTERVAL_MS
@@ -564,10 +572,14 @@ export class GlassesApp {
           .map((s) => s.coordinate)
           .map((c) => (c?.x != null && c.y != null ? { lat: c.x, lng: c.y } : { lat: NaN, lng: NaN })),
         selected: this.stationIdx,
+        label: this.stations.length > 1 ? `${this.stationIdx + 1}/${this.stations.length}` : '',
       })
       if (this.mode !== 'board' || !this.boardWithMap) return
       mark(`map rendered (${png.length} bytes)`)
-      await serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: 'map', imageData: png })), 10_000)
+      await serial(async () => {
+        if (slowImageMs) await new Promise((r) => setTimeout(r, slowImageMs))
+        return this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: 'map', imageData: png }))
+      }, 10_000, 'low')
       mark('map on screen')
       this.mapKey = key
       this.mapFix = fix
@@ -579,6 +591,13 @@ export class GlassesApp {
     }
     // A stop change during the transfer: send the newest state right away
     if (this.mapPending) void this.sendMap()
+    // Map matches the selected stop again: replace "Map updating…" with the walking time
+    else if (this.mode === 'board' && this.mapKey === this.mapKeyNow()) void this.renderBoard()
+  }
+
+  /** Identifies what the map should show: the stop list and the selected stop. */
+  private mapKeyNow() {
+    return `${this.stations.map((s) => s.id).join(',')}#${this.stationIdx}`
   }
 
   private async switchStation(delta: number) {
@@ -660,7 +679,8 @@ export class GlassesApp {
     }
     // Choosing a connection checks you into it
     this.active = { target: this.pendingTarget, query, trip: option.trip, checkedInAt: clock(), fetchedAt: clock() }
-    await saveCheckIn(this.active)
+    // Saved in the background: the journey screen must not wait for the storage round trip
+    void saveCheckIn(this.active)
     fastForward()
     await this.showTransit()
   }
@@ -702,7 +722,7 @@ export class GlassesApp {
       const match = conns.map(buildTrip).find((t) => t.signature === a.trip.signature)
       if (match) a.trip = match
       a.fetchedAt = clock()
-      if (this.active === a) await saveCheckIn(a)
+      if (this.active === a) void saveCheckIn(a)
     } catch {
       // keep last known timetable; progress continues by time
     }
@@ -730,31 +750,57 @@ export class GlassesApp {
       steps += `\n${' '.repeat(40)}${up}${down}`
     }
 
+    // Line first: drawing it overlaps with the text transfers (images queue behind text anyway)
+    const x = Math.round(dotX(a.trip, p))
+    const ring = p.source === 'gps'
+    // Dot moved visibly, GPS ring appeared/vanished, or forced (new page, new timetable)
+    const changed = Math.abs(x - this.lastDotX) >= 3 || ring !== this.lastRing
+    if (forceImage || (changed && clock() - this.imageSentAt >= IMAGE_MIN_INTERVAL_MS)) {
+      this.lastDotX = x
+      this.lastRing = ring
+      void this.sendImages()
+    }
+
     await this.upgrade(1, 'hdr', header)
     await this.upgrade(2, 'steps', steps)
     this.status(`${a.target.label}: ${nextAction(a.trip, p, now)}`)
-
-    const x = Math.round(dotX(a.trip, p))
-    if (forceImage || Math.abs(x - this.lastDotX) >= 3) {
-      this.lastDotX = x
-      void this.sendImages(a.trip, p)
-    }
   }
 
-  private async sendImages(trip: Trip, p: ReturnType<typeof estimateProgress>) {
-    if (this.imageBusy || !this.foreground) {
-      this.lastDotX = -1 // retry on next tick
+  /** Draws and sends the journey line. Requests during a transfer are not dropped: the newest
+   *  state is sent right after the current transfer (latest wins). */
+  private async sendImages() {
+    if (!this.foreground) {
+      this.lastDotX = -1 // sent on return to the foreground
+      return
+    }
+    if (this.imageBusy) {
+      this.imagePending = true
       return
     }
     this.imageBusy = true
+    this.imagePending = false
+    let failed = false
     try {
-      const [left, right] = await renderProgressPngs(trip, p)
-      await serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 3, containerName: 'lineL', imageData: left })), 10_000)
-      await serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 4, containerName: 'lineR', imageData: right })), 10_000)
+      const a = this.active
+      if (!a || this.mode !== 'transit') return
+      const p = estimateProgress(a.trip, clock(), this.fix)
+      const [left, right] = await renderProgressPngs(a.trip, p)
+      mark('journey line rendered')
+      const send = (id: number, name: string, data: number[]) =>
+        serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: id, containerName: name, imageData: data })), 10_000, 'low')
+      await send(3, 'lineL', left)
+      await send(4, 'lineR', right)
+      mark('journey line on screen')
+      this.imageSentAt = clock()
     } catch {
-      this.lastDotX = -1
+      failed = true
     } finally {
       this.imageBusy = false
+    }
+    if (this.imagePending) void this.sendImages()
+    else if (failed) {
+      this.lastDotX = -1
+      setTimeout(() => void this.sendImages(), 1000)
     }
   }
 
@@ -762,7 +808,7 @@ export class GlassesApp {
   private async endTransit() {
     this.active = null
     this.pendingTarget = null
-    await saveCheckIn(null)
+    void saveCheckIn(null)
     await this.renderBoard()
     await this.loadNearby()
   }

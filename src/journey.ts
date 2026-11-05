@@ -201,13 +201,19 @@ const GPS_MAX_AGE_MS = 120_000
 /** GPS may move the dot at most this far from the timetable estimate. Prevents snapping onto
  *  the wrong part of a route that passes the same place twice. */
 const GPS_MAX_SHIFT_MS = 30 * 60_000
+/** GPS differences smaller than this keep the timetable position. */
+const GPS_MIN_SHIFT_MS = 90_000
+/** Fixes less accurate than this (m) are ignored. */
+const GPS_MAX_ACCURACY_M = 150
 
 export function estimateProgress(trip: Trip, now: number, fix?: Fix | null): Progress {
   let time = now
   let source: Progress['source'] = 'time'
 
+  // Time first; GPS only corrects it, and only with a fresh, reasonably accurate fix
   const fresh = fix && (fix.timestamp === undefined || now - fix.timestamp < GPS_MAX_AGE_MS)
-  if (fix && fresh && now >= trip.start - 5 * 60_000) {
+  const accurate = fix && (fix.accuracy ?? 0) <= GPS_MAX_ACCURACY_M
+  if (fix && fresh && accurate && now >= trip.start - 5 * 60_000) {
     const tolerance = GPS_ROUTE_TOLERANCE_M + Math.min(fix.accuracy ?? 0, 500)
     let best: Projection | null = null
     for (const leg of trip.legs) {
@@ -216,7 +222,9 @@ export function estimateProgress(trip: Trip, now: number, fix?: Fix | null): Pro
       if (!best || Math.abs(p.time - now) < Math.abs(best.time - now)) best = p
     }
     if (best) {
-      time = best.time
+      // Small differences are GPS noise or stop-to-stop interpolation, not a real delay: keep the
+      // steady clock. GPS only moves the dot when it clearly disagrees (train late or early).
+      if (Math.abs(best.time - now) >= GPS_MIN_SHIFT_MS) time = best.time
       source = 'gps'
     }
     // Standing at a change point: both adjacent legs project onto the same spot, so the clock

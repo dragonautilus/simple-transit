@@ -23,6 +23,9 @@ export function mark(label: string): void {
 /** jitter=20 makes the mock position wander by up to 20 m every 2 s (like GPS after a cold start). */
 export const jitterM = num('jitter') || 0
 
+/** slowimg=3000 delays every image transfer by 3 s (the simulator is much faster than Bluetooth). */
+export const slowImageMs = num('slowimg') || 0
+
 /** ff=40 jumps the clock 40 minutes ahead once navigation starts. */
 let forwarded = false
 export function fastForward(): void {

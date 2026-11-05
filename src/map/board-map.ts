@@ -17,6 +17,8 @@ export interface MapInput {
   me: (MapPoint & { accuracy?: number }) | null
   stations: MapPoint[]
   selected: number
+  /** e.g. "2/6": which stop of the board the map shows, same as in the board header. */
+  label?: string
 }
 
 // ---------- Web Mercator ----------
@@ -252,6 +254,17 @@ export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promi
   ctx.fillStyle = '#9a9a9a'
   ctx.fillText(osm, MAP_W - 4, 11)
   ctx.font = 'bold 11px sans-serif'
+
+  // Stop number, bottom right, so map and header can be matched at a glance
+  if (input.label) {
+    ctx.font = 'bold 12px sans-serif'
+    const lw = ctx.measureText(input.label).width
+    ctx.fillStyle = '#000'
+    ctx.fillRect(MAP_W - lw - 8, MAP_H - 17, lw + 6, 15)
+    ctx.fillStyle = '#ffffff'
+    ctx.textAlign = 'right'
+    ctx.fillText(input.label, MAP_W - 4, MAP_H - 5)
+  }
 
   // Frame
   ctx.strokeStyle = '#4a4a4a'
