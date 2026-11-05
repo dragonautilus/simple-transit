@@ -1,8 +1,20 @@
-# Simple euro transit
+<h1 align="center">Simple euro transit</h1>
 
-Public transport on Even Realities G2 glasses: departures of the stops around you, a small street
-map, and step-by-step journeys with a live progress line. Switzerland and Germany (plus much of
-Europe), open data only.
+<p align="center">
+  <b>Public transport on your Even Realities G2 glasses.</b><br>
+  Departures around you, a small street map and step-by-step journeys with a live progress line.<br>
+  Switzerland and Germany (plus much of Europe), open data only.
+</p>
+
+<p align="center">
+  <img src="store/screenshots/06-journey-on-the-way.png" alt="Journey view on the glasses: progress line with the current position between Zürich HB and Bern" width="576">
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-informational" alt="MIT licence"></a>
+  <img src="https://img.shields.io/badge/glasses-Even%20Realities%20G2-informational" alt="Even Realities G2">
+  <img src="https://img.shields.io/badge/vibe%20coded%20with-Claude%20Code-d97757" alt="Vibe coded with Claude Code">
+</p>
 
 > **Vibe coded with Claude Code.** This app was built entirely by
 > [Claude Code](https://claude.com/claude-code), Anthropic's AI coding agent, from conversational
@@ -13,6 +25,29 @@ Europe), open data only.
 > Treat it accordingly. It comes without any warranty (see [LICENSE](LICENSE)), it is not an
 > official app of any transport company, and timetable information can be wrong or out of date:
 > check official sources before you rely on a connection.
+
+## Screenshots
+
+Captured from the Even Hub simulator with live timetable data (576 × 288 px, the resolution of the glasses display).
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="store/screenshots/01-departures-zurich.png" alt="Departures around you"><br><b>Departures around you</b><br>The closest stop with minutes, line, destination, platform and delay. The map shows where the stop is, with distance, direction and walking time.</td>
+<td width="50%" valign="top"><img src="store/screenshots/02-departures-berlin.png" alt="Also in Germany"><br><b>Also in Germany</b><br>Berlin S-Bahn, U-Bahn, tram and bus via Transitous. The network is picked by location.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="store/screenshots/03-targets.png" alt="Your targets"><br><b>Your targets</b><br>Home, work or any stop or address, set up in the phone app.</td>
+<td width="50%" valign="top"><img src="store/screenshots/04-connections.png" alt="Pick a connection"><br><b>Pick a connection</b><br>Departure, arrival, duration, number of changes and lines at a glance.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="store/screenshots/05-journey-start.png" alt="The journey as a line"><br><b>The journey as a line</b><br>Every change on the line, with times and platforms in the steps below.</td>
+<td width="50%" valign="top"><img src="store/screenshots/06-journey-on-the-way.png" alt="On the way"><br><b>On the way</b><br>The dot moves with the timetable, including delays, and is corrected by GPS.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="store/screenshots/07-journey-change.png" alt="At a change"><br><b>At a change</b><br>Which train, which platform, how many minutes until it leaves.</td>
+<td width="50%" valign="top"><img src="store/screenshots/08-check-in-menu.png" alt="Check in"><br><b>Check in</b><br>Close the app on a long ride and get straight back into your journey.</td>
+</tr>
+</table>
 
 ## Features
 
