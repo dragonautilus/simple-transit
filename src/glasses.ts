@@ -33,6 +33,7 @@ import {
   tripHeader,
   tripSteps,
   truncate,
+  fitBytes,
   type BoardRow,
 } from './format'
 import { buildTrip, distanceM, estimateProgress, type Fix, type Trip } from './journey'
@@ -50,6 +51,9 @@ const TICK_MS = 10_000
 const IMAGE_MIN_INTERVAL_MS = 8_000
 const NEARBY_REQUERY_M = 150
 const BACK = '‹ Back'
+/** The glasses reject a whole list page if one item is longer than 64 bytes (docs: "64 characters"). */
+const LIST_ITEM_BYTES = 60
+const LIST_MAX_ITEMS = 20
 const CONFIRM_ITEMS = ['Continue journey', 'Close app · stay checked in', 'Check out'] as const
 const BOARD_FOOTER = '▲▼ other stops · tap: navigate · 2×: exit'
 const BOARD_COLUMNS = [
@@ -379,12 +383,15 @@ export class GlassesApp {
     for (const t of texts ?? []) this.shown.set(t.containerName ?? '', t.content ?? ' ')
   }
 
-  private async rebuild(page: Partial<RebuildPageContainer>) {
-    if (!this.started) return
+  /** False if the glasses refused the page; the previous page then stays on screen. */
+  private async rebuild(page: Partial<RebuildPageContainer>): Promise<boolean> {
+    if (!this.started) return false
     const total = (page.textObject?.length ?? 0) + (page.listObject?.length ?? 0) + (page.imageObject?.length ?? 0)
     this.remember(page.textObject)
     this.page++
-    await serial(() => this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: total, ...page })))
+    const ok = await serial(() => this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: total, ...page })))
+    if (!ok) mark('page refused by the glasses')
+    return ok
   }
 
   /** Sends an image to a container of the current page; false if the page changed before it was its turn. */
@@ -430,9 +437,9 @@ export class GlassesApp {
     }
   }
 
-  private async showList(header: string, items: string[]) {
-    const names = items.map((s) => truncate(s, 60)).slice(0, 20)
-    await this.rebuild({
+  private async showList(header: string, items: string[]): Promise<boolean> {
+    const names = items.slice(0, LIST_MAX_ITEMS).map((s) => fitBytes(s, LIST_ITEM_BYTES))
+    return this.rebuild({
       textObject: [this.text(1, 'hdr', 0, 40, header)],
       listObject: [
         new ListContainerProperty({
@@ -692,11 +699,15 @@ export class GlassesApp {
       await this.showMessage(`→ ${target.label}`, 'No connection found (or offline).\nTap to go back.')
       return
     }
-    this.mode = 'connections'
-    await this.showList(`→ ${truncate(target.label, 24)} · pick a connection`, [
+    const shown = await this.showList(`→ ${truncate(target.label, 24)} · pick a connection`, [
       ...this.options.map((o) => connectionItem(o.trip)),
       BACK,
     ])
+    if (!shown) {
+      await this.showMessage(`→ ${target.label}`, 'The glasses could not show the connections.\nTap to go back.')
+      return
+    }
+    this.mode = 'connections'
     this.status(`Choosing a connection to ${target.label}`)
   }
 

@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { buildTrip } from '../journey'
-import { boardRows, shortStop, tripSteps } from '../format'
+import { boardRows, connectionItem, fitBytes, shortStop, tripSteps } from '../format'
 import { estimateProgress } from '../journey'
 import { cleanTrack, connectionsFromPlan, lineParts, locationsFromGeocode, nearbyFromMapStops, stationboardFromStopTimes } from './transitous'
 import { NETWORKS, networkFor, swiss } from '.'
 import plan from '../__fixtures__/transitous-plan.json'
+import longPlan from '../__fixtures__/transitous-plan-long.json'
 import stopTimes from '../__fixtures__/transitous-stoptimes.json'
 import mapStops from '../__fixtures__/transitous-stops.json'
 
@@ -46,7 +47,9 @@ describe('Transitous adapter', () => {
     expect(lineParts('BUS', 'Bus 100')).toEqual({ category: 'B', number: '100' })
     expect(lineParts('TRAM', 'M10')).toEqual({ category: 'T', number: 'M10' })
     expect(lineParts('SUBWAY', 'U5')).toEqual({ category: 'U5', number: null })
-    expect(lineParts('HIGHSPEED_RAIL', 'ICE 1234')).toEqual({ category: 'ICE 1234', number: null })
+    expect(lineParts('HIGHSPEED_RAIL', 'ICE 1234')).toEqual({ category: 'ICE', number: null })
+    expect(lineParts('LONG_DISTANCE', 'TGV Lyria 9226')).toEqual({ category: 'TGV Lyria', number: null })
+    expect(lineParts('HIGHSPEED_RAIL', 'ICE 70')).toEqual({ category: 'ICE 70', number: null })
   })
 
   it('shortens platforms', () => {
@@ -71,6 +74,22 @@ describe('Transitous adapter', () => {
     expect(stop.id).toBe('x')
     expect(addr.id).toBeNull()
     expect(addr.name).toBe('Unter den Linden 1, Berlin')
+  })
+})
+
+describe('long journeys (Wallisellen → Hamburg)', () => {
+  it('fit every connection list item into the 64-byte limit of the glasses', () => {
+    const items = connectionsFromPlan(longPlan as never, 'Eimsbüttel').map((c) => fitBytes(connectionItem(buildTrip(c)), 60))
+    expect(items.length).toBe(5)
+    for (const item of items) expect(new TextEncoder().encode(item).length).toBeLessThanOrEqual(60)
+    expect(items.join('\n')).not.toContain('9226')
+  })
+
+  it('cut by bytes, not characters', () => {
+    expect(fitBytes('short', 60)).toBe('short')
+    const cut = fitBytes('→'.repeat(30), 60)
+    expect(new TextEncoder().encode(cut).length).toBeLessThanOrEqual(60)
+    expect(cut.endsWith('…')).toBe(true)
   })
 })
 

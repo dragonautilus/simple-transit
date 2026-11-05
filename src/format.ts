@@ -31,6 +31,17 @@ export function truncate(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, Math.max(1, max - 1)).trimEnd()}…`
 }
 
+const utf8 = new TextEncoder()
+const bytes = (s: string) => utf8.encode(s).length
+
+/** Truncates to a UTF-8 byte budget: the glasses measure list items in bytes, and "→" alone takes 3. */
+export function fitBytes(s: string, maxBytes: number): string {
+  if (bytes(s) <= maxBytes) return s
+  const chars = [...s]
+  while (chars.length > 1 && bytes(`${chars.join('').trimEnd()}…`) > maxBytes) chars.pop()
+  return `${chars.join('').trimEnd()}…`
+}
+
 const delay = (min: number) => (min > 0 ? ` +${min}'` : '')
 const platform = (p: Point) => (p.platform ? ` Pl ${p.platform}${p.platformChanged ? '!' : ''}` : '')
 const time = (p: Point) => `${hhmm(p.scheduled)}${delay(p.delayMin)}`

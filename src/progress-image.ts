@@ -14,6 +14,7 @@ const PAD = 18
 const Y = 34
 const BRIGHT = '#ffffff'
 const DIM = '#6a6a6a'
+const END_MIN_ROOM = 72
 const FONT = 'bold 15px sans-serif'
 
 interface Node {
@@ -49,9 +50,10 @@ function roomFor(n: Node, list: Node[]): number {
   const i = list.indexOf(n)
   const prev = list[i - 1]?.x ?? -Infinity
   const next = list[i + 1]?.x ?? Infinity
-  // Neighbouring labels share the gap between their nodes
-  if (n.align === 'left') return Math.min(LINE_W, (next - n.x) / 2 - 4)
-  if (n.align === 'right') return Math.min(LINE_W, (n.x - prev) / 2 - 4)
+  // Neighbouring labels share the gap between their nodes, but origin and destination always get
+  // room for at least their time: they are drawn first, a change label that would collide is left out
+  if (n.align === 'left') return Math.min(LINE_W, Math.max((next - n.x) / 2 - 4, END_MIN_ROOM))
+  if (n.align === 'right') return Math.min(LINE_W, Math.max((n.x - prev) / 2 - 4, END_MIN_ROOM))
   return Math.min(n.x - prev, next - n.x) - 8
 }
 

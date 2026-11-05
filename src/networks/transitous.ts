@@ -118,8 +118,11 @@ export function lineParts(mode: string, displayName?: string, routeShortName?: s
     case 'AERIAL_LIFT':
     case 'CABLE_CAR':
       return { category: 'PB', number: null }
-    default:
-      return { category: label || mode.charAt(0) + mode.slice(1).toLowerCase(), number: null }
+    default: {
+      // "TGV Lyria 9226" → "TGV Lyria": like the Swiss board, long-distance train numbers are hidden
+      const trainNumber = /^(\D.*?)\s+\d{3,}$/.exec(label)
+      return { category: trainNumber?.[1] ?? (label || mode.charAt(0) + mode.slice(1).toLowerCase()), number: null }
+    }
   }
 }
 

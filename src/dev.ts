@@ -43,7 +43,13 @@ export const mockTargets: Target[] = (params.get('targets') ?? '')
   .split(';')
   .filter((s) => s.includes('|'))
   .map((s, i) => {
-    const [label, query, network] = s.split('|')
+    const [label, query, network] = s.split('|').map((p) => {
+      try {
+        return decodeURIComponent(p)
+      } catch {
+        return p
+      }
+    })
     return { id: `dev${i}`, label, query, place: label, network: network || undefined }
   })
 
