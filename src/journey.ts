@@ -39,7 +39,7 @@ export interface Trip {
   end: number
 }
 
-const parseTime = (iso: string | null | undefined): number | null => {
+export const parseTime = (iso: string | null | undefined): number | null => {
   if (!iso) return null
   // API format: 2026-11-03T13:32:00+0100 (offset without colon)
   const t = Date.parse(iso.replace(/([+-]\d\d)(\d\d)$/, '$1:$2'))
@@ -267,9 +267,4 @@ export function estimateProgress(trip: Trip, now: number, fix?: Fix | null): Pro
   const arrived = now > trip.end + 60_000 || nearDest
 
   return { time, fraction, legIndex, waiting, source, arrived }
-}
-
-/** Fraction (0..1) of a point in time along the trip. */
-export function fractionAt(trip: Trip, t: number): number {
-  return Math.min(1, Math.max(0, (t - trip.start) / Math.max(1, trip.end - trip.start)))
 }

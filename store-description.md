@@ -8,3 +8,5 @@ Simple euro transit puts public transport in Switzerland and Germany on your Eve
 - Check in to a journey: close the app during a long ride and it opens straight into your journey again. Checked out automatically after arrival.
 
 Timetable data: Switzerland: opentransportdata.swiss via transport.opendata.ch. Germany & Europe: Transitous and its data sources (https://transitous.org/sources/), incl. DELFI e.V. (CC BY 4.0). Map: © OpenStreetMap contributors (ODbL). All sources and licences are listed in the app under "Data sources & licences".
+
+Vibe coded with Claude Code: written entirely by an AI coding agent from prompts. Not an official app of any transport company; check official sources before relying on a connection.

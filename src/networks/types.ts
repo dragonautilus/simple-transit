@@ -11,8 +11,6 @@ export interface Network {
   name: string
   /** Data provider, e.g. "transport.opendata.ch". */
   source: string
-  /** Attribution text the provider asks for. */
-  attribution: string
   /** Rough coverage check used by automatic network selection. */
   covers(lat: number, lng: number): boolean
   /** Closest stops (with id), nearest first, `distance` in metres. */

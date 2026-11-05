@@ -2,7 +2,7 @@
 // (ASCII, Latin-1, → ↔, ● ○ ▶ ◆, box drawing).
 
 import type { StationboardEntry } from './api'
-import { lineName, type Leg, type Point, type Progress, type Trip } from './journey'
+import { lineName, parseTime, type Leg, type Point, type Progress, type Trip } from './journey'
 
 /** Rough characters per line on the 576 px canvas (font is proportional). */
 export const LINE_CHARS = 46
@@ -10,6 +10,12 @@ export const LINE_CHARS = 46
 export function hhmm(t: number): string {
   const d = new Date(t)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/** "YYYY-MM-DD" in local time, as the timetable APIs expect. */
+export function localDate(t: number): string {
+  const d = new Date(t)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 export function minutesUntil(t: number, now: number): number {
@@ -54,8 +60,7 @@ export interface BoardRow {
 
 /** One row per departure; rendered as aligned columns (time · line · → destination · platform/delay). */
 export function boardRows(entries: StationboardEntry[], stationName: string, now: number, max: number, destChars = 25): BoardRow[] {
-  const parse = (iso: string | null | undefined) =>
-    iso ? Date.parse(iso.replace(/([+-]\d\d)(\d\d)$/, '$1:$2')) : NaN
+  const parse = (iso: string | null | undefined) => parseTime(iso) ?? NaN
   return entries
     .map((e) => {
       const sched = parse(e.stop.departure)

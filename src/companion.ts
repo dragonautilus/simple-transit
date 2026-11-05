@@ -1,9 +1,10 @@
-// Phone-side settings page inside the Even App WebView: settings and preset targets.
+// Phone page inside the Even App: settings, preset targets, check-in card and credits.
 
 import type { Location } from './api'
 import { loadSettings, loadTargets, saveSettings, saveTargets, type Settings, type Target } from './bridge'
 import { DEFAULT_NETWORK, NETWORKS, getNetwork } from './networks'
 import { CREDITS } from './credits'
+import { hhmm } from './format'
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!
 
@@ -17,8 +18,10 @@ function locationQuery(l: Location): string | null {
   return c && c.x != null && c.y != null ? `${c.x},${c.y}` : null
 }
 
-const kindLabel = (l: Location) =>
-  l.id ? 'Stop' : l.icon === 'poi' ? 'Place' : 'Address'
+const kindLabel = (l: Location) => (l.id ? 'Stop' : l.icon === 'poi' ? 'Place' : 'Address')
+
+/** The glasses list holds 20 items, one of them "Back". */
+const MAX_TARGETS = 19
 
 export async function mountCompanion(
   onChange: (targets: Target[]) => void,
@@ -44,7 +47,7 @@ export async function mountCompanion(
   const options = (withAuto: boolean) =>
     [
       ...(withAuto ? [`<option value="auto">Automatic (by location)</option>`] : []),
-      ...NETWORKS.map((n) => `<option value="${n.id}">${esc(n.name)} · ${esc(n.source)}</option>`),
+      ...NETWORKS.map((n) => `<option value="${esc(n.id)}">${esc(n.name)} · ${esc(n.source)}</option>`),
     ].join('')
   networkSel.innerHTML = options(true)
   networkSel.value = settings.network
@@ -104,7 +107,7 @@ export async function mountCompanion(
   })
 
   const updateSave = () => {
-    saveBtn.disabled = !picked || !label.value.trim() || targets.length >= 19
+    saveBtn.disabled = !picked || !label.value.trim() || targets.length >= MAX_TARGETS
   }
 
   const setPicked = (l: Location | null) => {
@@ -173,19 +176,17 @@ export async function mountCompanion(
   renderCredits()
 }
 
-/** Shows the checked-in journey with a check-out button (hidden when not checked in). */
+/** Hidden when not checked in. */
 export function showCheckIn(info: { label: string; arrival: number } | null, onCheckOut: () => void): void {
   const card = $<HTMLElement>('#checkin')
   card.hidden = !info
   if (!info) return
-  const t = new Date(info.arrival)
-  const hhmm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
-  $<HTMLParagraphElement>('#checkin-text').textContent = `→ ${info.label} · arrival ${hhmm}`
+  $<HTMLParagraphElement>('#checkin-text').textContent = `→ ${info.label} · arrival ${hhmm(info.arrival)}`
   $<HTMLButtonElement>('#checkout').onclick = onCheckOut
 }
 
 function renderCredits() {
-  const link = (url: string, text: string) => `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`
+  const link = (url: string, text: string) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(text)}</a>`
   $<HTMLDivElement>('#credits').innerHTML = CREDITS.map(
     (g) => `
     <h3>${esc(g.title)}</h3>

@@ -13,6 +13,8 @@ export interface DecodedTile {
   lines: TileLine[]
 }
 
+const utf8 = new TextDecoder()
+
 class Pbf {
   pos: number
   constructor(
@@ -60,7 +62,7 @@ class Pbf {
   }
 
   text([start, end]: [number, number]) {
-    return new TextDecoder().decode(this.buf.subarray(start, end))
+    return utf8.decode(this.buf.subarray(start, end))
   }
 }
 

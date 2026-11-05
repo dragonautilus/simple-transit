@@ -3,6 +3,8 @@
 // The types below are also the shared data model: other networks (see networks/) convert their
 // responses into these shapes so the rest of the app stays network-agnostic.
 
+import { getJson } from './http'
+
 const BASE = 'https://transport.opendata.ch/v1'
 
 export interface Coordinate {
@@ -71,15 +73,7 @@ export interface StationboardEntry {
   to: string
 }
 
-async function get<T>(path: string, params: Record<string, string | number | undefined>): Promise<T> {
-  const qs = new URLSearchParams()
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== '') qs.append(k, String(v))
-  }
-  const res = await fetch(`${BASE}${path}?${qs}`)
-  if (!res.ok) throw new Error(`transport API ${res.status}`)
-  return res.json() as Promise<T>
-}
+const get = <T>(path: string, params: Record<string, string | number | undefined>) => getJson<T>(BASE, path, params)
 
 /** Closest stations to a GPS position, nearest first. Addresses and POIs (no id) are dropped. */
 export async function nearbyStations(lat: number, lng: number, max = 6): Promise<Location[]> {

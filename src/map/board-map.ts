@@ -3,6 +3,8 @@
 // when they can't be loaded the map still shows the stops and you, just without streets.
 
 import { TRANSITOUS_BASE } from '../networks/transitous'
+import { canvasToPng } from '../canvas'
+import { httpGet } from '../http'
 import { decodeTile, type DecodedTile } from './mvt'
 
 export const MAP_W = 144
@@ -83,29 +85,6 @@ export function computeView(input: MapInput): View | null {
 
 // ---------- Tiles ----------
 
-const cache = new Map<string, Promise<DecodedTile | null>>()
-const CACHE_MAX = 24
-
-function loadTile(z: number, x: number, y: number): Promise<DecodedTile | null> {
-  const key = `${z}/${x}/${y}`
-  let p = cache.get(key)
-  if (!p) {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 8000)
-    p = fetch(`${TRANSITOUS_BASE}/tiles/${key}.mvt`, { signal: ctrl.signal })
-      .then(async (res) => (res.ok ? decodeTile(new Uint8Array(await res.arrayBuffer()), ['streets']) : null))
-      .catch(() => null)
-      .finally(() => clearTimeout(timer))
-    // Failed tiles are retried on the next render
-    p.then((t) => t || cache.delete(key))
-    cache.set(key, p)
-    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
-  }
-  return p
-}
-
-// ---------- Drawing ----------
-
 const STREET_STYLE: Record<string, [width: number, colour: string, dash?: number[]]> = {
   motorway: [3, '#8c8c8c'],
   trunk: [3, '#8c8c8c'],
@@ -121,28 +100,55 @@ const STREET_STYLE: Record<string, [width: number, colour: string, dash?: number
   tram: [1, '#404040', [2, 3]],
 }
 
-/** Draw order: thin and minor ways first so main roads stay on top. */
-const ORDER = Object.keys(STREET_STYLE).reverse()
+/** Minor ways first, so main roads end up on top. */
+const DRAW_ORDER = Object.keys(STREET_STYLE).reverse()
 
-export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promise<void> {
-  canvas.width = MAP_W
-  canvas.height = MAP_H
-  const ctx = canvas.getContext('2d')!
-  ctx.fillStyle = '#000'
-  ctx.fillRect(0, 0, MAP_W, MAP_H)
-  const view = computeView(input)
-  if (!view) return
-  const toCanvas = ([x, y]: [number, number]): [number, number] => [
-    (x - view.cx) * view.k + MAP_W / 2,
-    (y - view.cy) * view.k + MAP_H / 2,
-  ]
+interface Tile {
+  extent: number
+  /** Point lists per street kind; kinds the map doesn't draw (footways…) are dropped. */
+  byKind: Map<string, number[][]>
+}
 
-  // Streets
-  const tiles = await Promise.all(view.tiles.map(([x, y]) => loadTile(view.z, x, y)))
+function toTile(decoded: DecodedTile): Tile {
+  const byKind = new Map<string, number[][]>()
+  for (const line of decoded.lines) {
+    if (!STREET_STYLE[line.kind]) continue
+    let list = byKind.get(line.kind)
+    if (!list) byKind.set(line.kind, (list = []))
+    list.push(line.points)
+  }
+  return { extent: decoded.extent, byKind }
+}
+
+const cache = new Map<string, Promise<Tile | null>>()
+const CACHE_MAX = 24
+
+function loadTile(z: number, x: number, y: number): Promise<Tile | null> {
+  const key = `${z}/${x}/${y}`
+  let p = cache.get(key)
+  if (!p) {
+    p = httpGet(`${TRANSITOUS_BASE}/tiles/${key}.mvt`, 8000)
+      .then(async (res) => toTile(decodeTile(new Uint8Array(await res.arrayBuffer()), ['streets'])))
+      .catch(() => null)
+    void p.then((t) => t || cache.delete(key)) // failed tiles are retried on the next render
+    cache.set(key, p)
+    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
+  }
+  return p
+}
+
+// ---------- Drawing ----------
+
+type Ctx = CanvasRenderingContext2D
+type ToCanvas = (p: MapPoint) => [number, number]
+const WHITE = '#ffffff'
+const LABEL = '#c0c0c0'
+
+function drawStreets(ctx: Ctx, view: View, tiles: (Tile | null)[]) {
   const scale = 2 ** (16 - view.z)
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
-  for (const kind of ORDER) {
+  for (const kind of DRAW_ORDER) {
     const [width, colour, dash] = STREET_STYLE[kind]
     ctx.strokeStyle = colour
     ctx.lineWidth = width
@@ -152,10 +158,12 @@ export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promi
       if (!tile) return
       const [tx, ty] = view.tiles[i]
       const f = (TILE * scale) / tile.extent
-      for (const line of tile.lines) {
-        if (line.kind !== kind) continue
-        for (let j = 0; j < line.points.length; j += 2) {
-          const [px, py] = toCanvas([tx * TILE * scale + line.points[j] * f, ty * TILE * scale + line.points[j + 1] * f])
+      const ox = tx * TILE * scale
+      const oy = ty * TILE * scale
+      for (const points of tile.byKind.get(kind) ?? []) {
+        for (let j = 0; j < points.length; j += 2) {
+          const px = (ox + points[j] * f - view.cx) * view.k + MAP_W / 2
+          const py = (oy + points[j + 1] * f - view.cy) * view.k + MAP_H / 2
           if (j === 0) ctx.moveTo(px, py)
           else ctx.lineTo(px, py)
         }
@@ -164,11 +172,12 @@ export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promi
     ctx.stroke()
   }
   ctx.setLineDash([])
+}
 
-  // Other nearby stops: small rings
+function drawOtherStops(ctx: Ctx, input: MapInput, at: ToCanvas) {
   input.stations.forEach((s, i) => {
     if (i === input.selected) return
-    const [x, y] = toCanvas(project(s))
+    const [x, y] = at(s)
     ctx.beginPath()
     ctx.arc(x, y, 4, 0, Math.PI * 2)
     ctx.fillStyle = '#000'
@@ -177,62 +186,67 @@ export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promi
     ctx.strokeStyle = '#a0a0a0'
     ctx.stroke()
   })
+}
 
-  // Selected stop: bright square (like a stop sign), you: bright dot with a ring
-  const station = input.stations[input.selected]
-  const me = input.me
-  if (station && me) {
-    const [ax, ay] = toCanvas(project(me))
-    const [bx, by] = toCanvas(project(station))
-    ctx.setLineDash([2, 3])
-    ctx.lineWidth = 1.5
-    ctx.strokeStyle = '#ffffff'
+function drawWayToStop(ctx: Ctx, me: MapPoint, stop: MapPoint, at: ToCanvas) {
+  const [ax, ay] = at(me)
+  const [bx, by] = at(stop)
+  ctx.setLineDash([2, 3])
+  ctx.lineWidth = 1.5
+  ctx.strokeStyle = WHITE
+  ctx.beginPath()
+  ctx.moveTo(ax, ay)
+  ctx.lineTo(bx, by)
+  ctx.stroke()
+  ctx.setLineDash([])
+}
+
+/** Hollow, so your dot stays visible inside it when you stand at the stop. */
+function drawSelectedStop(ctx: Ctx, stop: MapPoint, at: ToCanvas) {
+  const [x, y] = at(stop)
+  ctx.fillStyle = '#000'
+  ctx.fillRect(x - 11, y - 11, 22, 22)
+  ctx.lineWidth = 3
+  ctx.strokeStyle = WHITE
+  ctx.strokeRect(x - 8.5, y - 8.5, 17, 17)
+}
+
+function drawMe(ctx: Ctx, me: NonNullable<MapInput['me']>, view: View, at: ToCanvas) {
+  const [x, y] = at(me)
+  const accuracyPx = (me.accuracy ?? 0) / view.mpp
+  if (accuracyPx > 9) {
     ctx.beginPath()
-    ctx.moveTo(ax, ay)
-    ctx.lineTo(bx, by)
+    ctx.arc(x, y, Math.min(accuracyPx, MAP_W), 0, Math.PI * 2)
+    ctx.lineWidth = 1
+    ctx.strokeStyle = '#6a6a6a'
     ctx.stroke()
-    ctx.setLineDash([])
   }
-  if (station) {
-    // Hollow square, so your dot stays visible inside it when you stand at the stop
-    const [x, y] = toCanvas(project(station))
-    ctx.fillStyle = '#000'
-    ctx.fillRect(x - 11, y - 11, 22, 22)
-    ctx.lineWidth = 3
-    ctx.strokeStyle = '#ffffff'
-    ctx.strokeRect(x - 8.5, y - 8.5, 17, 17)
-  }
-  if (me) {
-    const [x, y] = toCanvas(project(me))
-    const acc = (me.accuracy ?? 0) / view.mpp
-    if (acc > 9) {
-      ctx.beginPath()
-      ctx.arc(x, y, Math.min(acc, MAP_W), 0, Math.PI * 2)
-      ctx.lineWidth = 1
-      ctx.strokeStyle = '#6a6a6a'
-      ctx.stroke()
-    }
+  for (const [r, colour] of [[6.5, '#000'], [4.5, WHITE]] as const) {
     ctx.beginPath()
-    ctx.arc(x, y, 6.5, 0, Math.PI * 2)
-    ctx.fillStyle = '#000'
-    ctx.fill()
-    ctx.beginPath()
-    ctx.arc(x, y, 4.5, 0, Math.PI * 2)
-    ctx.fillStyle = '#ffffff'
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fillStyle = colour
     ctx.fill()
   }
+}
 
-  // North marker and scale bar
-  ctx.font = 'bold 11px sans-serif'
-  ctx.fillStyle = '#c0c0c0'
-  ctx.textAlign = 'right'
-  ctx.textAlign = 'left'
-  ctx.fillText('N↑', 4, 12)
-  const bar = scaleBar(view.mpp)
-  const len = bar / view.mpp
+/** Text on a black backing, so it stays readable over streets. */
+function label(ctx: Ctx, text: string, x: number, y: number, align: CanvasTextAlign, font: string, colour: string) {
+  ctx.font = font
+  ctx.textAlign = align
+  const w = ctx.measureText(text).width
+  const left = align === 'right' ? x - w : x
+  ctx.fillStyle = '#000'
+  ctx.fillRect(left - 2, y - 10, w + 4, 13)
+  ctx.fillStyle = colour
+  ctx.fillText(text, x, y)
+}
+
+function drawScaleBar(ctx: Ctx, view: View) {
+  const metres = scaleBar(view.mpp)
+  const len = metres / view.mpp
   ctx.fillStyle = '#000'
   ctx.fillRect(2, MAP_H - 16, len + 8, 14)
-  ctx.strokeStyle = '#c0c0c0'
+  ctx.strokeStyle = LABEL
   ctx.lineWidth = 2
   ctx.beginPath()
   ctx.moveTo(5, MAP_H - 9)
@@ -240,33 +254,35 @@ export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promi
   ctx.lineTo(5 + len, MAP_H - 5)
   ctx.lineTo(5 + len, MAP_H - 9)
   ctx.stroke()
-  ctx.textAlign = 'left'
-  ctx.fillStyle = '#c0c0c0'
-  ctx.fillText(bar >= 1000 ? `${bar / 1000} km` : `${bar} m`, 9 + len, MAP_H - 4)
+  label(ctx, metres >= 1000 ? `${metres / 1000} km` : `${metres} m`, 9 + len, MAP_H - 4, 'left', 'bold 11px sans-serif', LABEL)
+}
 
-  // OpenStreetMap attribution at the map, as the ODbL / OSM guidelines ask
-  ctx.font = 'bold 9px sans-serif'
-  ctx.textAlign = 'right'
-  const osm = '© OSM'
-  const w = ctx.measureText(osm).width
+export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promise<void> {
+  canvas.width = MAP_W
+  canvas.height = MAP_H
+  const ctx = canvas.getContext('2d')!
   ctx.fillStyle = '#000'
-  ctx.fillRect(MAP_W - w - 6, 2, w + 4, 11)
-  ctx.fillStyle = '#9a9a9a'
-  ctx.fillText(osm, MAP_W - 4, 11)
-  ctx.font = 'bold 11px sans-serif'
-
-  // Stop number, bottom right, so map and header can be matched at a glance
-  if (input.label) {
-    ctx.font = 'bold 12px sans-serif'
-    const lw = ctx.measureText(input.label).width
-    ctx.fillStyle = '#000'
-    ctx.fillRect(MAP_W - lw - 8, MAP_H - 17, lw + 6, 15)
-    ctx.fillStyle = '#ffffff'
-    ctx.textAlign = 'right'
-    ctx.fillText(input.label, MAP_W - 4, MAP_H - 5)
+  ctx.fillRect(0, 0, MAP_W, MAP_H)
+  const view = computeView(input)
+  if (!view) return
+  const at: ToCanvas = (p) => {
+    const [x, y] = project(p)
+    return [(x - view.cx) * view.k + MAP_W / 2, (y - view.cy) * view.k + MAP_H / 2]
   }
 
-  // Frame
+  drawStreets(ctx, view, await Promise.all(view.tiles.map(([x, y]) => loadTile(view.z, x, y))))
+  drawOtherStops(ctx, input, at)
+  const stop = input.stations[input.selected]
+  if (stop && input.me) drawWayToStop(ctx, input.me, stop, at)
+  if (stop) drawSelectedStop(ctx, stop, at)
+  if (input.me) drawMe(ctx, input.me, view, at)
+
+  label(ctx, 'N↑', 4, 12, 'left', 'bold 11px sans-serif', LABEL)
+  // Required OpenStreetMap attribution at the map itself
+  label(ctx, '© OSM', MAP_W - 4, 11, 'right', 'bold 9px sans-serif', '#9a9a9a')
+  drawScaleBar(ctx, view)
+  if (input.label) label(ctx, input.label, MAP_W - 4, MAP_H - 5, 'right', 'bold 12px sans-serif', WHITE)
+
   ctx.strokeStyle = '#4a4a4a'
   ctx.lineWidth = 1
   ctx.strokeRect(0.5, 0.5, MAP_W - 1, MAP_H - 1)
@@ -293,8 +309,5 @@ export function compass(a: MapPoint, b: MapPoint): string {
 export async function renderMapPng(input: MapInput): Promise<number[]> {
   const canvas = document.createElement('canvas')
   await drawMap(canvas, input)
-  const blob = await new Promise<Blob>((resolve, reject) =>
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png'),
-  )
-  return Array.from(new Uint8Array(await blob.arrayBuffer()))
+  return canvasToPng(canvas)
 }

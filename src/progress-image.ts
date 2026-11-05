@@ -1,6 +1,7 @@
 // Renders the journey line (legs, changes, current-position dot) into a 576 px wide greyscale
 // bitmap, split into two image containers because one image container is at most 288 px wide.
 
+import { canvasToPng } from './canvas'
 import type { Progress, Trip } from './journey'
 import { layoutLine, type LineLayout } from './line-layout'
 import { hhmm, shortStop, truncate } from './format'
@@ -186,10 +187,7 @@ async function sliceToPng(src: HTMLCanvasElement, x: number): Promise<number[]> 
   part.width = HALF_W
   part.height = LINE_H
   part.getContext('2d')!.drawImage(src, x, 0, HALF_W, LINE_H, 0, 0, HALF_W, LINE_H)
-  const blob = await new Promise<Blob>((resolve, reject) =>
-    part.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png'),
-  )
-  return Array.from(new Uint8Array(await blob.arrayBuffer()))
+  return canvasToPng(part)
 }
 
 /** PNG bytes for the left and right image container. */

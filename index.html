@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'none'; form-action 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Simple euro transit</title>
   </head>
@@ -67,14 +68,20 @@
 
       <section>
         <h2>Data sources &amp; licences</h2>
-        <p class="caption">Simple euro transit is built on open data, open services and open-source software. Thank you to everyone behind them.</p>
+        <p class="caption">Simple euro transit is open-source software under the MIT License and is built on open data, open services and open-source software. Thank you to everyone behind them.</p>
         <div id="credits" class="credits"></div>
+      </section>
+
+      <section class="card about">
+        <span class="label">About</span>
+        <p>Vibe coded with <a href="https://claude.com/claude-code" target="_blank" rel="noopener noreferrer">Claude Code</a>: this app was written entirely by an AI coding agent from conversational prompts, not by hand.</p>
+        <p class="caption">Not an official app of any transport company. Timetable information can be wrong or out of date, so check official sources before you rely on a connection. No warranty (MIT License).</p>
       </section>
 
       <footer class="caption">
         Timetable data: Switzerland: opentransportdata.swiss via transport.opendata.ch.
-        Germany &amp; Europe: <a href="https://transitous.org/sources/" target="_blank" rel="noopener">Transitous and its data sources</a>, incl. DELFI e.V. (CC BY 4.0).
-        Map: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.
+        Germany &amp; Europe: <a href="https://transitous.org/sources/" target="_blank" rel="noopener noreferrer">Transitous and its data sources</a>, incl. DELFI e.V. (CC BY 4.0).
+        Map: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors.
       </footer>
     </main>
     <script type="module" src="/src/main.ts"></script>

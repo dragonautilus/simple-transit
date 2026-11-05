@@ -44,7 +44,21 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.`
 
+const APP_LICENCE = MIT('Copyright (c) 2026 Dominik Fahrni')
+
 export const CREDITS: CreditGroup[] = [
+  {
+    title: 'This app',
+    items: [
+      {
+        name: 'Simple euro transit',
+        url: 'https://opensource.org/license/mit',
+        usedFor: 'Source code of this app. Data and third-party software below keep their own licences.',
+        licence: 'MIT License',
+        fullText: APP_LICENCE,
+      },
+    ],
+  },
   {
     title: 'Timetable data',
     items: [

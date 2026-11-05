@@ -1,8 +1,8 @@
 // Registry of public transport networks.
 //
-// Adding a network: write an adapter that implements `Network` (see types.ts and transitous.ts
-// for an example that converts a foreign API into the api.ts shapes), add it to NETWORKS below
-// and add its API origin to "permissions" → "network" → "whitelist" in app.json.
+// Adding a network: write an adapter that implements `Network` (transitous.ts is an example that
+// converts a foreign API into the api.ts shapes), add it to NETWORKS below, add its API origin to
+// the network whitelist in app.json and its data sources and licences to credits.ts.
 
 import * as swissApi from '../api'
 import { transitous } from './transitous'
@@ -14,7 +14,6 @@ export const swiss: Network = {
   id: 'ch',
   name: 'Switzerland',
   source: 'transport.opendata.ch',
-  attribution: 'opentransportdata.swiss via transport.opendata.ch',
   // Switzerland + Liechtenstein bounding box (also catches some border towns, which the Swiss
   // timetable mostly covers too)
   covers: (lat, lng) => lat >= 45.81 && lat <= 47.81 && lng >= 5.95 && lng <= 10.5,

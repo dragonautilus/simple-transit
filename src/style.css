@@ -192,8 +192,19 @@ button.secondary {
   gap: 8px;
 }
 
-.checkin p {
+.checkin p,
+.about p {
   margin: 0;
+}
+
+.about {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.about a {
+  color: inherit;
 }
 
 .checkin[hidden] {

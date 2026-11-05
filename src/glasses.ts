@@ -1,8 +1,10 @@
-// Glasses side: departure board of the closest stops, target/connection picker and the in-transit
-// view with the journey line. Rendering goes through serialised bridge calls (see bridge.ts).
+// Glasses side: departure board of the closest stops, target/connection picker and the journey
+// view. Every bridge call is a Bluetooth round trip (see bridge.ts), so the code below avoids
+// sending anything that is already on screen and sends images only when they changed.
 
 import {
   AppLocationAccuracy,
+  type AppLocation,
   CreateStartUpPageContainer,
   ImageContainerProperty,
   ImageRawDataUpdate,
@@ -24,6 +26,7 @@ import {
   boardRows,
   connectionItem,
   hhmm,
+  localDate,
   nextAction,
   withoutTown,
   tripHeader,
@@ -32,7 +35,7 @@ import {
   type BoardRow,
 } from './format'
 import { buildTrip, distanceM, estimateProgress, type Fix, type Trip } from './journey'
-import { fastForward, jitterM, mark, mockFix, mockTargets, perf, slowImageMs, now as clock } from './dev'
+import { fastForward, mark, mockFix, mockTargets, slowImageMs, startDevHooks, now as clock } from './dev'
 import { HALF_W, LINE_H, dotX, renderProgressPngs } from './progress-image'
 
 type Mode = 'loading' | 'board' | 'targets' | 'connections' | 'transit' | 'confirmStop' | 'message'
@@ -75,10 +78,14 @@ const SNAPSHOT_KEY = 'sst.boardSnapshot'
 const SNAPSHOT_MAX_AGE_MS = 20 * 60_000
 /** Departures of the other nearby stops are prefetched so swiping is instant. */
 const BOARD_CACHE_MS = 60_000
+/** A position older than this is refreshed before planning a trip. */
+const STALE_FIX_MS = 5 * 60_000
 /** Walking speed for the "n' walk" hint, m/min. */
 const WALK_M_PER_MIN = 75
 /** In automatic mode, try the next network when the closest stop is further than this (m). */
 const FALLBACK_M = 1500
+
+const toFix = (l: AppLocation): Fix => ({ lat: l.latitude, lng: l.longitude, accuracy: l.accuracy, timestamp: l.timestamp ?? clock() })
 
 interface BoardContent {
   header: string
@@ -161,23 +168,21 @@ export class GlassesApp {
       this.mode = 'board'
       this.boardWithMap = this.settings.map
     } else first = { containerTotalNum: 3, textObject: this.messageTexts('Simple euro transit', 'Locating closest stops…', ' ') }
-    mark('storage read')
     await serial(() => this.bridge.createStartUpPageContainer(new CreateStartUpPageContainer(first)))
     this.remember(first.textObject)
-    mark(`${snapshot ? 'startup page (last board)' : resume ? 'startup page (journey)' : 'startup page'}, bridge calls before it: ${bridgeStats.calls - 1}`)
+    mark(`first page (${resume ? 'journey' : snapshot ? 'last board' : 'loading'}), bridge calls before it: ${bridgeStats.calls - 1}`)
     this.started = true
     if (snapshot) {
       if (this.boardWithMap) void this.sendMap(true)
       void this.loadBoard().then(() => this.prefetchBoards())
     }
-    // Read after the first journey frame was queued, not in front of it
     if (!resume) void this.loadStored(false)
-    this.unsubscribers.push(this.bridge.onEvenHubEvent((e) => void this.onEvent(e)))
-    const resumed = !!resume
+    this.unsubscribers.push(this.bridge.onEvenHubEvent((e) => void this.onEvent(e).catch(() => undefined)))
     if (resume) {
       this.active = resume
       this.enterTransitMode()
       await this.renderTransit(true)
+      // Only now, so the reads don't queue in front of the first journey frame
       void this.loadStored(true)
       // Delays may have changed while the app was closed
       void this.refreshTrip().then(() => this.renderTransit(true))
@@ -185,49 +190,47 @@ export class GlassesApp {
     this.unsubscribers.push(
       this.bridge.onAppLocationChanged((l) => {
         if (mockFix) return
-        this.fix = { lat: l.latitude, lng: l.longitude, accuracy: l.accuracy, timestamp: l.timestamp ?? clock() }
-        void this.onFix()
+        this.fix = toFix(l)
+        void this.onFix().catch(() => undefined)
       }),
     )
     void this.startLocation()
-    const firstFix = mockFix ? { latitude: mockFix.lat, longitude: mockFix.lng, accuracy: mockFix.accuracy } : await this.quickFix()
-    mark('first fix')
+    const firstFix = mockFix ? { ...mockFix, timestamp: clock() } : await this.quickFix()
     if (firstFix) {
-      this.fix = { lat: firstFix.latitude, lng: firstFix.longitude, accuracy: firstFix.accuracy, timestamp: clock() }
+      this.fix = firstFix
       await this.onFix()
-    } else if (!this.fix && !resumed && !snapshot) {
+    } else if (!this.fix && !resume && !snapshot) {
       await this.showMessage('No GPS fix yet', 'Waiting for location…\nCheck that the Even app may use your location.', 'loading')
     }
-    this.timer = setInterval(() => void this.tick(), TICK_MS)
-    if (mockFix && jitterM) {
-      setInterval(() => {
-        const r = () => ((Math.random() * 2 - 1) * jitterM) / 111_000
-        this.fix = { lat: mockFix!.lat + r(), lng: mockFix!.lng + r(), accuracy: jitterM, timestamp: clock() }
+    this.timer = setInterval(() => void this.tick().catch(() => undefined), TICK_MS)
+    startDevHooks(
+      (fix) => {
+        this.fix = fix
         void this.onFix()
-      }, 2000)
-    }
-    if (perf) setInterval(() => mark(`bridge calls ${bridgeStats.calls}, busy ${Math.round(bridgeStats.busyMs)} ms`), 10_000)
+      },
+      () => `bridge calls ${bridgeStats.calls}, busy ${Math.round(bridgeStats.busyMs)} ms`,
+    )
   }
 
-  /** Authoritative targets, settings and check-in from the Even app storage (after the first frame). */
+  /** The Even app storage is authoritative; the first frame was built from the local mirror. */
   private async loadStored(resumed: boolean) {
     const [targets, settings, saved] = await Promise.all([loadTargets(), loadSettings(), loadCheckIn()])
     this.targets = targets.length ? targets : mockTargets
     if (this.mode === 'targets') await this.showTargets()
     if (JSON.stringify(settings) !== JSON.stringify(this.settings)) await this.setSettings(settings)
-    // Check-in only in the app storage (WebView data was reset): open it now
     if (!resumed && !this.active && saved && !checkInExpired(saved, clock(), this.fix) && this.showsBoard()) {
+      // Checked in, but the WebView mirror was reset
       this.active = saved
       await this.showTransit()
       void this.refreshTrip().then(() => this.renderTransit(true))
     }
   }
 
-  /** A coarse fix first (fast, enough to find nearby stops), the precise one if that fails.
-   *  Precise positions keep arriving through the location updates anyway. */
-  private async quickFix() {
+  /** Coarse first: it is fast and good enough to find nearby stops. Precise positions follow
+   *  through the location updates. */
+  private async quickFix(): Promise<Fix | null> {
     const get = (accuracy: AppLocationAccuracy, timeoutMs: number) =>
-      this.bridge.getAppLocation({ accuracy, timeoutMs }).catch(() => null)
+      this.bridge.getAppLocation({ accuracy, timeoutMs }).then((l) => (l ? toFix(l) : null)).catch(() => null)
     return (await get(AppLocationAccuracy.Medium, 2500)) ?? (this.fix ? null : await get(AppLocationAccuracy.High, 8000))
   }
 
@@ -253,11 +256,12 @@ export class GlassesApp {
   private restoreSnapshot(): boolean {
     try {
       const s = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) ?? 'null')
-      if (!s?.stations?.length || !s.fix || clock() - s.at > SNAPSHOT_MAX_AGE_MS) return false
+      const usable = Array.isArray(s?.stations) && s.stations.length > 0 && Array.isArray(s.board) && typeof s.at === 'number' && s.fix
+      if (!usable || clock() - s.at > SNAPSHOT_MAX_AGE_MS) return false
       this.network = getNetwork(s.network)
       this.stations = s.stations
       this.stationIdx = Math.min(s.stationIdx ?? 0, s.stations.length - 1)
-      this.board = s.board ?? []
+      this.board = s.board
       this.boardFetchedAt = s.at
       this.nearbyFix = s.fix
       this.fix = s.fix
@@ -275,12 +279,11 @@ export class GlassesApp {
       .catch(() => false)
   }
 
-  /** Check out from the phone app. */
+  /** From the phone app. */
   async checkOut(): Promise<void> {
     if (this.active) await this.endTransit()
   }
 
-  /** Called by the companion UI when settings were changed. */
   async setSettings(settings: Settings): Promise<void> {
     const networkChanged = settings.network !== this.settings.network
     this.settings = settings
@@ -293,7 +296,6 @@ export class GlassesApp {
     }
   }
 
-  /** Called by the companion UI when targets were edited. */
   async setTargets(targets: Target[]): Promise<void> {
     this.targets = targets
     if (this.mode === 'targets') await this.showTargets()
@@ -359,6 +361,7 @@ export class GlassesApp {
     return new ImageContainerProperty({ xPosition: MAP_X, yPosition: 38, width: MAP_W, height: MAP_H, containerID: 8, containerName: 'map' })
   }
 
+  /** Records what a new page shows, so upgrade() can skip unchanged text. */
   private remember(texts: TextContainerProperty[] | undefined) {
     this.shown.clear()
     for (const t of texts ?? []) this.shown.set(t.containerName ?? '', t.content ?? ' ')
@@ -373,15 +376,12 @@ export class GlassesApp {
 
   private async upgrade(id: number, name: string, content: string) {
     if (!this.started || !this.foreground) return
-    content = content || ' '
-    // Every update is a Bluetooth round trip: skip text that is already on screen
+    content ||= ' '
     if (this.shown.get(name) === content) return
     this.shown.set(name, content)
     await serial(() =>
-      this.bridge.textContainerUpgrade(
-        new TextContainerUpgrade({ containerID: id, containerName: name, content: content || ' ', contentOffset: 0, contentLength: 0 }),
-      ),
-    ).catch(() => false)
+      this.bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: name, content, contentOffset: 0, contentLength: 0 })),
+    ).catch(() => this.shown.delete(name))
   }
 
   /** Full-screen text page. 'loading' switches to the board by itself once departures arrive. */
@@ -425,7 +425,7 @@ export class GlassesApp {
     if (this.mode === 'transit') return this.renderTransit()
     const moved = !this.nearbyFix || distanceM(this.nearbyFix, this.fix) > NEARBY_REQUERY_M
     if (moved) await this.loadNearby()
-    else if (this.mode === 'board') await this.renderBoard() // only changed text is sent; map is throttled
+    else if (this.mode === 'board') await this.renderBoard()
   }
 
   private async loadNearby() {
@@ -508,16 +508,15 @@ export class GlassesApp {
       return { header: 'No stops nearby', columns: ['', '', 'No public transport stop found around you.', ''], mapInfo: ' ' }
     }
     const exact = this.distanceTo(station)
-    // Rounded so GPS jitter doesn't change the text (and cause an update) every few seconds
+    // Rounded, so GPS jitter doesn't change the text (and cost an update) every few seconds
     const metres = exact == null ? null : exact < 200 ? Math.round(exact / 10) * 10 : Math.round(exact / 50) * 50
-    const dist = metres != null ? ` · ${Math.round(metres)} m` : ''
+    const dist = metres != null ? ` · ${metres} m` : ''
     const page = this.stations.length > 1 ? `  ${this.stationIdx + 1}/${this.stations.length}` : ''
     const header = `${truncate(withoutTown(station.name ?? '?'), 30)}${dist}${page}   ${hhmm(now)}`
     const c = station.coordinate
-    const where = metres != null && this.fix && c?.x != null && c.y != null ? `${Math.round(metres)} m ${compass(this.fix, { lat: c.x, lng: c.y })}` : ' '
+    const where = metres != null && this.fix && c?.x != null && c.y != null ? `${metres} m ${compass(this.fix, { lat: c.x, lng: c.y })}` : ' '
     const walk = metres != null ? `${Math.max(1, Math.round(metres / WALK_M_PER_MIN))}' walk` : ' '
-    // The image takes a few seconds over Bluetooth; text is instant, so it says when the map
-    // still shows the previous stop
+    // The map image takes seconds over Bluetooth, text is instant
     const mapInfo = `${where}\n${this.mapKey === this.mapKeyNow() ? walk : 'Map updating…'}`
     const destChars = this.settings.map ? DEST_CHARS_MAP : DEST_CHARS
     const rows = placeholder ? [] : boardRows(this.board, station.name ?? '', now, BOARD_ROWS, destChars)
@@ -537,10 +536,9 @@ export class GlassesApp {
       this.boardWithMap = withMap
       this.mapKey = ''
       await this.rebuild({ textObject: this.boardTexts(c, withMap), ...(withMap ? { imageObject: [this.mapImage()] } : {}) })
-      mark('board on screen')
     } else {
       await this.upgrade(1, 'hdr', c.header)
-      for (const [i, k] of BOARD_COLUMNS.entries()) await this.upgrade(i + 2, k.name, c.columns[i])
+      for (const [i, { name }] of BOARD_COLUMNS.entries()) await this.upgrade(i + 2, name, c.columns[i])
       if (withMap) await this.upgrade(7, 'mapinfo', c.mapInfo)
     }
     if (withMap) void this.sendMap(rebuilt)
@@ -575,27 +573,23 @@ export class GlassesApp {
         label: this.stations.length > 1 ? `${this.stationIdx + 1}/${this.stations.length}` : '',
       })
       if (this.mode !== 'board' || !this.boardWithMap) return
-      mark(`map rendered (${png.length} bytes)`)
       await serial(async () => {
         if (slowImageMs) await new Promise((r) => setTimeout(r, slowImageMs))
         return this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: 'map', imageData: png }))
       }, 10_000, 'low')
-      mark('map on screen')
       this.mapKey = key
       this.mapFix = fix
       this.mapSentAt = clock()
     } catch {
-      this.mapKey = '' // retry on the next tick
+      this.mapKey = '' // retried on the next tick
     } finally {
       this.mapBusy = false
     }
-    // A stop change during the transfer: send the newest state right away
     if (this.mapPending) void this.sendMap()
-    // Map matches the selected stop again: replace "Map updating…" with the walking time
+    // Replaces "Map updating…" with the walking time
     else if (this.mode === 'board' && this.mapKey === this.mapKeyNow()) void this.renderBoard()
   }
 
-  /** Identifies what the map should show: the stop list and the selected stop. */
   private mapKeyNow() {
     return `${this.stations.map((s) => s.id).join(',')}#${this.stationIdx}`
   }
@@ -628,12 +622,11 @@ export class GlassesApp {
   }
 
   private async pickTarget(target: Target) {
-    // The position may still be the one from the last board snapshot: get a current one first
-    if (!mockFix && (!this.fix || clock() - (this.fix.timestamp ?? 0) > 5 * 60_000)) {
+    // The position may still be the one from the last board snapshot
+    const stale = () => !this.fix || clock() - (this.fix.timestamp ?? 0) > STALE_FIX_MS
+    if (!mockFix && stale()) {
       await this.showMessage(`→ ${target.label}`, 'Getting your position…')
-      const l = await this.quickFix()
-      if (l) this.fix = { lat: l.latitude, lng: l.longitude, accuracy: l.accuracy, timestamp: clock() }
-      else if (this.fix && clock() - (this.fix.timestamp ?? 0) > 5 * 60_000) this.fix = null
+      this.fix = (await this.quickFix()) ?? (stale() ? null : this.fix)
     }
     if (!this.fix) {
       await this.showMessage('No GPS fix', 'Your position is needed to plan the trip.\nTap to go back.')
@@ -641,12 +634,12 @@ export class GlassesApp {
     }
     this.pendingTarget = target
     await this.showMessage(`→ ${target.label}`, 'Searching connections…')
-    const now = new Date(clock())
+    const now = clock()
     const query: api.ConnectionQuery = {
       from: `${this.fix.lat.toFixed(6)},${this.fix.lng.toFixed(6)}`,
       to: target.query,
-      date: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
-      time: hhmm(now.getTime()),
+      date: localDate(now),
+      time: hhmm(now),
       toName: target.label,
     }
     try {
@@ -669,18 +662,11 @@ export class GlassesApp {
 
   private async startTransit(option: { trip: Trip; query: api.ConnectionQuery }) {
     if (!this.pendingTarget) return
-    const first = option.trip.legs[0]
-    // Re-query from the same origin at the trip's departure time so refreshes return this connection
-    const dep = new Date(first.from.scheduled)
-    const query: api.ConnectionQuery = {
-      ...option.query,
-      date: `${dep.getFullYear()}-${String(dep.getMonth() + 1).padStart(2, '0')}-${String(dep.getDate()).padStart(2, '0')}`,
-      time: hhmm(first.from.scheduled),
-    }
-    // Choosing a connection checks you into it
+    // Same origin and the trip's own departure time, so refreshes return this connection again
+    const dep = option.trip.legs[0].from.scheduled
+    const query: api.ConnectionQuery = { ...option.query, date: localDate(dep), time: hhmm(dep) }
     this.active = { target: this.pendingTarget, query, trip: option.trip, checkedInAt: clock(), fetchedAt: clock() }
-    // Saved in the background: the journey screen must not wait for the storage round trip
-    void saveCheckIn(this.active)
+    void saveCheckIn(this.active) // in the background: the journey screen must not wait for it
     fastForward()
     await this.showTransit()
   }
@@ -704,7 +690,6 @@ export class GlassesApp {
     this.mode = 'transit'
   }
 
-  /** Puts the checked-in journey on screen. */
   private async showTransit() {
     if (!this.active) return this.renderBoard()
     this.enterTransitMode()
@@ -724,7 +709,7 @@ export class GlassesApp {
       a.fetchedAt = clock()
       if (this.active === a) void saveCheckIn(a)
     } catch {
-      // keep last known timetable; progress continues by time
+      // Offline: keep the last timetable, progress continues by the clock
     }
   }
 
@@ -750,10 +735,9 @@ export class GlassesApp {
       steps += `\n${' '.repeat(40)}${up}${down}`
     }
 
-    // Line first: drawing it overlaps with the text transfers (images queue behind text anyway)
+    // Before the text: drawing overlaps with the text transfers (images queue behind text anyway)
     const x = Math.round(dotX(a.trip, p))
     const ring = p.source === 'gps'
-    // Dot moved visibly, GPS ring appeared/vanished, or forced (new page, new timetable)
     const changed = Math.abs(x - this.lastDotX) >= 3 || ring !== this.lastRing
     if (forceImage || (changed && clock() - this.imageSentAt >= IMAGE_MIN_INTERVAL_MS)) {
       this.lastDotX = x
@@ -766,8 +750,7 @@ export class GlassesApp {
     this.status(`${a.target.label}: ${nextAction(a.trip, p, now)}`)
   }
 
-  /** Draws and sends the journey line. Requests during a transfer are not dropped: the newest
-   *  state is sent right after the current transfer (latest wins). */
+  /** Requests during a transfer are not dropped: the newest state follows right after it. */
   private async sendImages() {
     if (!this.foreground) {
       this.lastDotX = -1 // sent on return to the foreground
@@ -785,7 +768,6 @@ export class GlassesApp {
       if (!a || this.mode !== 'transit') return
       const p = estimateProgress(a.trip, clock(), this.fix)
       const [left, right] = await renderProgressPngs(a.trip, p)
-      mark('journey line rendered')
       const send = (id: number, name: string, data: number[]) =>
         serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: id, containerName: name, imageData: data })), 10_000, 'low')
       await send(3, 'lineL', left)
@@ -804,7 +786,7 @@ export class GlassesApp {
     }
   }
 
-  /** Check out: forget the journey and go back to the departure board. */
+  /** Check out. */
   private async endTransit() {
     this.active = null
     this.pendingTarget = null

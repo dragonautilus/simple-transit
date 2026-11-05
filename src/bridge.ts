@@ -1,5 +1,5 @@
-// Access to the Even App bridge. All bridge calls share one BLE link, so they are serialised and
-// each one gets a timeout (a flaky hop can otherwise hang for ~30 s).
+// Access to the Even App bridge and the app's persistent storage. All bridge calls share one
+// Bluetooth link, so they run one at a time, each with a timeout (a flaky hop can hang for ~30 s).
 
 import { waitForEvenAppBridge, type EvenAppBridge } from '@evenrealities/even_hub_sdk'
 
@@ -14,14 +14,13 @@ export function getBridge(timeoutMs = 4000): Promise<EvenAppBridge | null> {
   return bridgePromise
 }
 
-/** Bridge traffic counters (logged with ?perf=1). */
 export const bridgeStats = { calls: 0, busyMs: 0 }
 
 interface Job {
   run: () => Promise<void>
 }
-// Two lanes, one call at a time: page changes, text and storage go first; images (slow
-// Bluetooth transfers) only when nothing else waits, so text and taps never queue behind them.
+// Images are slow to transfer, so they only go when nothing else waits: text and taps never
+// queue behind them.
 const lanes: { high: Job[]; low: Job[] } = { high: [], low: [] }
 let running = false
 
@@ -146,20 +145,33 @@ export async function write(key: string, value: unknown): Promise<void> {
   if (bridge) await serial(() => bridge.setLocalStorage(key, raw))
 }
 
+const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0
+
+function isTarget(t: unknown): t is Target {
+  const x = t as Target
+  return !!x && str(x.id) && str(x.label) && str(x.query) && str(x.place) && (x.network === undefined || str(x.network))
+}
+
 export async function loadTargets(): Promise<Target[]> {
   const parsed = await read(KEY)
-  return Array.isArray(parsed) ? parsed : []
+  return Array.isArray(parsed) ? parsed.filter(isTarget) : []
 }
 
 export const saveTargets = (targets: Target[]): Promise<void> => write(KEY, targets)
 
-const toSettings = (parsed: unknown): Settings => ({ ...DEFAULT_SETTINGS, ...(parsed && typeof parsed === 'object' ? parsed : {}) })
+function toSettings(parsed: unknown): Settings {
+  const p = (parsed ?? {}) as Partial<Settings>
+  return {
+    network: str(p.network) ? p.network : DEFAULT_SETTINGS.network,
+    map: typeof p.map === 'boolean' ? p.map : DEFAULT_SETTINGS.map,
+  }
+}
 
 export async function loadSettings(): Promise<Settings> {
   return toSettings(await read(SETTINGS_KEY))
 }
 
-/** Settings from the WebView mirror, for the very first frame. */
+/** From the WebView mirror, for the very first frame. */
 export const cachedSettings = (): Settings => toSettings(readCached(SETTINGS_KEY))
 
 export const saveSettings = (settings: Settings): Promise<void> => write(SETTINGS_KEY, settings)

@@ -6,6 +6,7 @@
 // themselves (User-Agent or, in a browser, the Referer) and link https://transitous.org/sources/.
 
 import type { Connection, ConnectionQuery, Location, Section, StationboardEntry, Stop } from '../api'
+import { getJson } from '../http'
 import type { Network } from './types'
 
 export const TRANSITOUS_BASE = 'https://api.transitous.org'
@@ -237,13 +238,7 @@ export function locationsFromGeocode(matches: TMatch[]): Location[] {
 
 // ---------- HTTP ----------
 
-async function get<T>(path: string, params: Record<string, string | number | boolean | undefined>): Promise<T> {
-  const qs = new URLSearchParams()
-  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') qs.append(k, String(v))
-  const res = await fetch(`${TRANSITOUS_BASE}${path}?${qs}`)
-  if (!res.ok) throw new Error(`Transitous ${res.status}`)
-  return res.json() as Promise<T>
-}
+const get = <T>(path: string, params: Record<string, string | number | boolean | undefined>) => getJson<T>(TRANSITOUS_BASE, path, params)
 
 /** Local "YYYY-MM-DD" + "hh:mm" → ISO instant. */
 function isoTime(q: ConnectionQuery): string | undefined {
@@ -256,7 +251,6 @@ export const transitous: Network = {
   id: 'eu',
   name: 'Germany & Europe',
   source: 'Transitous',
-  attribution: 'Transitous (transitous.org/sources), © OpenStreetMap contributors',
   // Everything outside Switzerland; used as the fallback network
   covers: () => true,
 
