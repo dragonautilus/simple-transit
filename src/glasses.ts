@@ -8,6 +8,7 @@ import {
   CreateStartUpPageContainer,
   ImageContainerProperty,
   ImageRawDataUpdate,
+  ImageRawDataUpdateResult,
   ListContainerProperty,
   ListItemContainerProperty,
   OsEventTypeList,
@@ -71,6 +72,9 @@ const DEST_CHARS_MAP = 15
 const MAP_REDRAW_M = 25
 /** …but at most this often: every image costs a slow Bluetooth transfer that delays all other updates. */
 const MAP_MIN_INTERVAL_MS = 15_000
+/** While swiping through stops, the map waits until you pause, so the Bluetooth link isn't busy
+ *  with maps of stops you skip past. */
+const MAP_SWIPE_SETTLE_MS = 700
 /** Fixes less accurate than this (m) don't move the map dot (GPS warming up). */
 const MAP_MAX_ACCURACY_M = 60
 /** Last departure board, shown instantly on the next start while fresh data loads. */
@@ -122,6 +126,12 @@ export class GlassesApp {
   private mapBusy = false
   private mapPending = false
   private mapSentAt = 0
+  private swipedAt = 0
+  private mapTimer: ReturnType<typeof setTimeout> | undefined
+  /** Counts page changes. Updates are queued, and one queued for a page that has been replaced
+   *  meanwhile must be dropped: sent to a container that no longer exists, an image can stall
+   *  the glasses (blank pages, no reaction to input). */
+  private page = 0
   /** Text currently on the glasses per container; unchanged text is not sent again. */
   private shown = new Map<string, string>()
   /** Departures per stop id, for instant swiping between stops. */
@@ -139,6 +149,7 @@ export class GlassesApp {
   private lastDotX = -1
   private imageBusy = false
   private imagePending = false
+  private imageFailures = 0
   private imageSentAt = 0
   private lastRing = false
 
@@ -169,6 +180,7 @@ export class GlassesApp {
       this.boardWithMap = this.settings.map
     } else first = { containerTotalNum: 3, textObject: this.messageTexts('Simple euro transit', 'Locating closest stops…', ' ') }
     await serial(() => this.bridge.createStartUpPageContainer(new CreateStartUpPageContainer(first)))
+    this.page++
     this.remember(first.textObject)
     mark(`first page (${resume ? 'journey' : snapshot ? 'last board' : 'loading'}), bridge calls before it: ${bridgeStats.calls - 1}`)
     this.started = true
@@ -371,7 +383,25 @@ export class GlassesApp {
     if (!this.started) return
     const total = (page.textObject?.length ?? 0) + (page.listObject?.length ?? 0) + (page.imageObject?.length ?? 0)
     this.remember(page.textObject)
+    this.page++
     await serial(() => this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: total, ...page })))
+  }
+
+  /** Sends an image to a container of the current page; false if the page changed before it was its turn. */
+  private async sendImage(id: number, name: string, png: number[]): Promise<boolean> {
+    const page = this.page
+    const result = await serial(
+      async () => {
+        if (page !== this.page) return null
+        if (slowImageMs) await new Promise((r) => setTimeout(r, slowImageMs))
+        return this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: id, containerName: name, imageData: png }))
+      },
+      10_000,
+      'low',
+    )
+    if (result === null) return false
+    if (result !== ImageRawDataUpdateResult.success) throw new Error(`image ${name}: ${result}`)
+    return true
   }
 
   private async upgrade(id: number, name: string, content: string) {
@@ -379,8 +409,11 @@ export class GlassesApp {
     content ||= ' '
     if (this.shown.get(name) === content) return
     this.shown.set(name, content)
-    await serial(() =>
-      this.bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: name, content, contentOffset: 0, contentLength: 0 })),
+    const page = this.page
+    await serial(async () =>
+      page === this.page
+        ? this.bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: name, content, contentOffset: 0, contentLength: 0 }))
+        : false,
     ).catch(() => this.shown.delete(name))
   }
 
@@ -560,9 +593,16 @@ export class GlassesApp {
     const moved = goodFix && (!this.mapFix || distanceM(this.mapFix, this.fix!) >= MAP_REDRAW_M)
     const due = clock() - this.mapSentAt >= MAP_MIN_INTERVAL_MS
     if (!station || (!force && key === this.mapKey && !(moved && due))) return
+    const settle = this.swipedAt + MAP_SWIPE_SETTLE_MS - clock()
+    if (settle > 0) {
+      clearTimeout(this.mapTimer)
+      this.mapTimer = setTimeout(() => void this.sendMap(force), settle)
+      return
+    }
     this.mapBusy = true
     this.mapPending = false
     const fix = this.fix
+    let sent = false
     try {
       const png = await renderMapPng({
         me: fix ? { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy } : null,
@@ -573,10 +613,9 @@ export class GlassesApp {
         label: this.stations.length > 1 ? `${this.stationIdx + 1}/${this.stations.length}` : '',
       })
       if (this.mode !== 'board' || !this.boardWithMap) return
-      await serial(async () => {
-        if (slowImageMs) await new Promise((r) => setTimeout(r, slowImageMs))
-        return this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: 'map', imageData: png }))
-      }, 10_000, 'low')
+      // Page changed while waiting: the next board page sends its own map
+      sent = await this.sendImage(8, 'map', png)
+      if (!sent) return
       this.mapKey = key
       this.mapFix = fix
       this.mapSentAt = clock()
@@ -585,9 +624,9 @@ export class GlassesApp {
     } finally {
       this.mapBusy = false
     }
-    if (this.mapPending) void this.sendMap()
-    // Replaces "Map updating…" with the walking time
-    else if (this.mode === 'board' && this.mapKey === this.mapKeyNow()) void this.renderBoard()
+    // Updates "Map updating…" and sends the next map if the stop changed meanwhile
+    if (sent && this.mode === 'board') void this.renderBoard()
+    else if (this.mapPending) void this.sendMap()
   }
 
   private mapKeyNow() {
@@ -597,6 +636,7 @@ export class GlassesApp {
   private async switchStation(delta: number) {
     if (this.stations.length < 2) return
     this.stationIdx = (this.stationIdx + delta + this.stations.length) % this.stations.length
+    this.swipedAt = clock()
     const id = this.stations[this.stationIdx].id
     const cached = id ? this.boardCache.get(id) : undefined
     if (cached && clock() - cached.at < BOARD_CACHE_MS) {
@@ -768,21 +808,21 @@ export class GlassesApp {
       if (!a || this.mode !== 'transit') return
       const p = estimateProgress(a.trip, clock(), this.fix)
       const [left, right] = await renderProgressPngs(a.trip, p)
-      const send = (id: number, name: string, data: number[]) =>
-        serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: id, containerName: name, imageData: data })), 10_000, 'low')
-      await send(3, 'lineL', left)
-      await send(4, 'lineR', right)
-      mark('journey line on screen')
-      this.imageSentAt = clock()
+      if ((await this.sendImage(3, 'lineL', left)) && (await this.sendImage(4, 'lineR', right))) {
+        mark('journey line on screen')
+        this.imageSentAt = clock()
+        this.imageFailures = 0
+      }
     } catch {
       failed = true
+      this.imageFailures++
     } finally {
       this.imageBusy = false
     }
     if (this.imagePending) void this.sendImages()
     else if (failed) {
-      this.lastDotX = -1
-      setTimeout(() => void this.sendImages(), 1000)
+      this.lastDotX = -1 // the next tick tries again in any case
+      if (this.imageFailures < 3) setTimeout(() => void this.sendImages(), 1000)
     }
   }
 
@@ -836,6 +876,10 @@ export class GlassesApp {
           return this.onClick()
         case OsEventTypeList.DOUBLE_CLICK_EVENT:
           return this.onDoubleClick()
+        case OsEventTypeList.SCROLL_TOP_EVENT:
+          return this.onScroll(-1)
+        case OsEventTypeList.SCROLL_BOTTOM_EVENT:
+          return this.onScroll(1)
       }
       return
     }
