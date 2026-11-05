@@ -13,6 +13,16 @@ let offset = Number.isNaN(fixedNow) ? 0 : fixedNow - Date.now()
 
 export const now = (): number => Date.now() + offset
 
+/** perf=1 logs timings and bridge traffic to the console. */
+export const perf = params.has('perf')
+/** Milliseconds since the page started loading. */
+export function mark(label: string): void {
+  if (perf) console.log(`[perf] ${Math.round(performance.now())} ms  ${label}`)
+}
+
+/** jitter=20 makes the mock position wander by up to 20 m every 2 s (like GPS after a cold start). */
+export const jitterM = num('jitter') || 0
+
 /** ff=40 jumps the clock 40 minutes ahead once navigation starts. */
 let forwarded = false
 export function fastForward(): void {

@@ -18,7 +18,7 @@ scripts/beta-release.sh "what changed"
 ```
 
 It type-checks, runs the tests, builds `icon.png` and `simple-euro-transit.ehpk`, creates the app (first run) or uploads a new version, promotes it to **beta** and invites the tester.
-For every later build raise `"version"` in `app.json` first (currently `0.3.0`, next e.g. `0.3.1`); a version number can only be uploaded once.
+For every later build raise `"version"` in `app.json` first (currently `0.3.1`, next e.g. `0.3.2`); a version number can only be uploaded once.
 
 Then manually:
 
@@ -45,6 +45,13 @@ Settings (phone)
 - [ ] Network "Automatic" picks Switzerland in CH and Germany & Europe elsewhere; forcing a network reloads the board.
 - [ ] Map checkbox off → board uses the full width; on → map is back.
 
+Speed (0.3.1)
+- [ ] The "app starting" notice on the glasses disappears quickly (first page is drawn before anything else loads).
+- [ ] Second start within 20 min: last board appears at once, departures refresh within a second or two.
+- [ ] First start / after a long break: board appears within a few seconds (coarse position first).
+- [ ] Swiping between stops is instant (except the first seconds after start).
+- [ ] Standing still: taps react immediately, map is not redrawn all the time.
+
 Departure board (start from the **glasses menu**)
 - [ ] Shows the closest stop with distance and correct local time.
 - [ ] Columns line up: minutes · line (Tram/Bus/S/IC…) · → destination · platform/delay.
@@ -52,7 +59,7 @@ Departure board (start from the **glasses menu**)
 - [ ] Walk 200 m: the stop list updates.
 - [ ] No scrollbar on the right of any column (text fits).
 - [ ] Map: hollow square = selected stop, filled dot = you, small rings = other nearby stops, dotted line between you and the stop.
-- [ ] Map follows when you walk (redraws every ~10 m) and when you swipe to another stop; "n m NE · n' walk" under it is right.
+- [ ] Map follows when you walk (redraws every ~25 m, at most every 15 s) and when you swipe to another stop; "n m NE · n' walk" under it is right.
 - [ ] Streets are readable on the glasses (not too bright/dim). Map without streets = tile download failed (still shows stops and you).
 
 Germany (needs a German location or the network forced to "Germany & Europe")

@@ -115,8 +115,6 @@ const STREET_STYLE: Record<string, [width: number, colour: string, dash?: number
   living_street: [2, '#505050'],
   pedestrian: [2, '#505050'],
   service: [1, '#3a3a3a'],
-  footway: [1, '#2e2e2e'],
-  path: [1, '#2e2e2e'],
   rail: [1, '#505050', [3, 3]],
   tram: [1, '#404040', [2, 3]],
 }

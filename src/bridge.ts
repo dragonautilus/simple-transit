@@ -16,13 +16,18 @@ export function getBridge(timeoutMs = 4000): Promise<EvenAppBridge | null> {
 
 let queue: Promise<unknown> = Promise.resolve()
 
+/** Bridge traffic counters (logged with ?perf=1). */
+export const bridgeStats = { calls: 0, busyMs: 0 }
+
 export function serial<T>(fn: () => Promise<T>, timeoutMs = 6000): Promise<T> {
-  const run = queue.then(() =>
-    Promise.race([
+  const run = queue.then(() => {
+    const start = performance.now()
+    bridgeStats.calls++
+    return Promise.race([
       fn(),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('bridge call timed out')), timeoutMs)),
-    ]),
-  )
+    ]).finally(() => (bridgeStats.busyMs += performance.now() - start))
+  })
   queue = run.catch(() => undefined)
   return run
 }
@@ -52,14 +57,10 @@ export const DEFAULT_SETTINGS: Settings = { network: 'auto', map: true }
 const KEY = 'sst.targets'
 const SETTINGS_KEY = 'sst.settings'
 
-async function read(key: string): Promise<unknown> {
-  const bridge = await getBridge()
-  let raw: string | null = null
-  try {
-    raw = bridge ? await serial(() => bridge.getLocalStorage(key)) : localStorage.getItem(key)
-  } catch {
-    raw = null
-  }
+// The Even app storage is the source of truth (survives WebView resets); every value is mirrored
+// into WebView localStorage so startup can use it synchronously, without a round trip to the app.
+
+const parse = (raw: string | null | undefined): unknown => {
   try {
     return raw ? JSON.parse(raw) : null
   } catch {
@@ -67,11 +68,50 @@ async function read(key: string): Promise<unknown> {
   }
 }
 
-async function write(key: string, value: unknown): Promise<void> {
-  const raw = JSON.stringify(value)
+/** Last known value from the WebView mirror, synchronous (may be missing or slightly stale). */
+export function readCached(key: string): unknown {
+  try {
+    return parse(localStorage.getItem(key))
+  } catch {
+    return null
+  }
+}
+
+function mirror(key: string, raw: string | null) {
+  try {
+    if (raw) localStorage.setItem(key, raw)
+    else localStorage.removeItem(key)
+  } catch {
+    // mirror is only an optimisation
+  }
+}
+
+/** One round trip per key, shared by the phone page and the glasses side. */
+const reads = new Map<string, Promise<unknown>>()
+
+export function read(key: string): Promise<unknown> {
+  let p = reads.get(key)
+  if (!p) {
+    p = (async () => {
+      const bridge = await getBridge()
+      if (!bridge) return readCached(key)
+      const raw = await serial(() => bridge.getLocalStorage(key)).catch(() => null)
+      // Empty in the app (e.g. first start after an update): keep what the mirror has
+      if (!raw) return readCached(key)
+      mirror(key, raw)
+      return parse(raw)
+    })()
+    reads.set(key, p)
+  }
+  return p
+}
+
+export async function write(key: string, value: unknown): Promise<void> {
+  const raw = value == null ? '' : JSON.stringify(value)
+  mirror(key, raw || null)
+  reads.set(key, Promise.resolve(value ?? null))
   const bridge = await getBridge()
   if (bridge) await serial(() => bridge.setLocalStorage(key, raw))
-  else localStorage.setItem(key, raw)
 }
 
 export async function loadTargets(): Promise<Target[]> {
@@ -81,9 +121,13 @@ export async function loadTargets(): Promise<Target[]> {
 
 export const saveTargets = (targets: Target[]): Promise<void> => write(KEY, targets)
 
+const toSettings = (parsed: unknown): Settings => ({ ...DEFAULT_SETTINGS, ...(parsed && typeof parsed === 'object' ? parsed : {}) })
+
 export async function loadSettings(): Promise<Settings> {
-  const parsed = await read(SETTINGS_KEY)
-  return { ...DEFAULT_SETTINGS, ...(parsed && typeof parsed === 'object' ? parsed : {}) }
+  return toSettings(await read(SETTINGS_KEY))
 }
+
+/** Settings from the WebView mirror, for the very first frame. */
+export const cachedSettings = (): Settings => toSettings(readCached(SETTINGS_KEY))
 
 export const saveSettings = (settings: Settings): Promise<void> => write(SETTINGS_KEY, settings)

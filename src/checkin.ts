@@ -3,7 +3,7 @@
 // once the journey is over.
 
 import type { ConnectionQuery } from './api'
-import { getBridge, serial, type Target } from './bridge'
+import { read, readCached, write, type Target } from './bridge'
 import { distanceM, type Fix, type Trip } from './journey'
 
 export interface CheckIn {
@@ -43,39 +43,27 @@ function valid(c: unknown): c is CheckIn {
   return !!x?.trip?.legs?.length && !!x.target && !!x.query
 }
 
-/** Even app storage survives app restarts; WebView storage is a fallback (plain browser, dev). */
-export async function loadCheckIn(): Promise<CheckIn | null> {
-  const bridge = await getBridge()
-  const parse = (raw: string | null | undefined) => {
-    try {
-      return raw ? JSON.parse(raw) : null
-    } catch {
-      return null
-    }
-  }
-  let found: unknown = null
-  if (bridge) found = parse(await serial(() => bridge.getLocalStorage(KEY)).catch(() => null))
-  if (!valid(found)) {
-    try {
-      found = parse(localStorage.getItem(KEY)) ?? parse(localStorage.getItem(LEGACY_KEY))
-    } catch {
-      found = null
-    }
-  }
+function normalise(found: unknown): CheckIn | null {
   if (!valid(found)) return null
   // Legacy entries have neither timestamp
   return { ...found, checkedInAt: found.checkedInAt ?? found.fetchedAt ?? 0, fetchedAt: found.fetchedAt ?? 0 }
 }
 
+/** From the WebView mirror, synchronous: decides the very first frame on the glasses. */
+export function cachedCheckIn(): CheckIn | null {
+  return normalise(readCached(KEY)) ?? normalise(readCached(LEGACY_KEY))
+}
+
+/** From the Even app storage (survives app restarts and WebView resets). */
+export async function loadCheckIn(): Promise<CheckIn | null> {
+  return normalise(await read(KEY)) ?? cachedCheckIn()
+}
+
 export async function saveCheckIn(c: CheckIn | null): Promise<void> {
-  const raw = c ? JSON.stringify(c) : ''
   try {
-    if (c) localStorage.setItem(KEY, raw)
-    else localStorage.removeItem(KEY)
     localStorage.removeItem(LEGACY_KEY)
   } catch {
-    // WebView storage unavailable: Even app storage below still holds it
+    // ignore
   }
-  const bridge = await getBridge()
-  if (bridge) await serial(() => bridge.setLocalStorage(KEY, raw)).catch(() => false)
+  await write(KEY, c).catch(() => undefined)
 }

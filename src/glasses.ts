@@ -16,10 +16,10 @@ import {
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk'
 import type * as api from './api'
-import { DEFAULT_SETTINGS, loadSettings, loadTargets, serial, type Settings, type Target } from './bridge'
+import { DEFAULT_SETTINGS, bridgeStats, cachedSettings, loadSettings, loadTargets, serial, type Settings, type Target } from './bridge'
 import { fallbackNetwork, getNetwork, networkFor, swiss, type Network } from './networks'
 import { MAP_H, MAP_W, compass, renderMapPng } from './map/board-map'
-import { checkInExpired, loadCheckIn, saveCheckIn, type CheckIn } from './checkin'
+import { cachedCheckIn, checkInExpired, loadCheckIn, saveCheckIn, type CheckIn } from './checkin'
 import {
   boardRows,
   connectionItem,
@@ -32,7 +32,7 @@ import {
   type BoardRow,
 } from './format'
 import { buildTrip, distanceM, estimateProgress, type Fix, type Trip } from './journey'
-import { fastForward, mockFix, mockTargets, now as clock } from './dev'
+import { fastForward, jitterM, mark, mockFix, mockTargets, perf, now as clock } from './dev'
 import { HALF_W, LINE_H, dotX, renderProgressPngs } from './progress-image'
 
 type Mode = 'loading' | 'board' | 'targets' | 'connections' | 'transit' | 'confirmStop' | 'message'
@@ -62,8 +62,17 @@ const BOARD_COLUMNS_MAP = [
 ] as const
 const DEST_CHARS = 25
 const DEST_CHARS_MAP = 15
-/** Redraw the map when you moved this far (m). */
-const MAP_REDRAW_M = 10
+/** Redraw the map when you moved this far (m)… */
+const MAP_REDRAW_M = 25
+/** …but at most this often: every image costs a slow Bluetooth transfer that delays all other updates. */
+const MAP_MIN_INTERVAL_MS = 15_000
+/** Fixes less accurate than this (m) don't move the map dot (GPS warming up). */
+const MAP_MAX_ACCURACY_M = 60
+/** Last departure board, shown instantly on the next start while fresh data loads. */
+const SNAPSHOT_KEY = 'sst.boardSnapshot'
+const SNAPSHOT_MAX_AGE_MS = 20 * 60_000
+/** Departures of the other nearby stops are prefetched so swiping is instant. */
+const BOARD_CACHE_MS = 60_000
 /** Walking speed for the "n' walk" hint, m/min. */
 const WALK_M_PER_MIN = 75
 /** In automatic mode, try the next network when the closest stop is further than this (m). */
@@ -102,6 +111,12 @@ export class GlassesApp {
   private mapKey = ''
   private mapFix: Fix | null = null
   private mapBusy = false
+  private mapPending = false
+  private mapSentAt = 0
+  /** Text currently on the glasses per container; unchanged text is not sent again. */
+  private shown = new Map<string, string>()
+  /** Departures per stop id, for instant swiping between stops. */
+  private boardCache = new Map<string, { entries: api.StationboardEntry[]; at: number }>()
   private boardFetchedAt = 0
   private boardError = ''
 
@@ -124,18 +139,33 @@ export class GlassesApp {
   ) {}
 
   async start(): Promise<void> {
-    this.targets = await loadTargets()
-    if (this.targets.length === 0) this.targets = mockTargets
-    this.settings = await loadSettings()
+    // The "app starting" notice stays until the first page exists, so that page is built from
+    // synchronous local copies only; the Even app storage is read right after.
+    this.settings = cachedSettings()
+    const saved = cachedCheckIn()
     // Checked in: open straight into the journey from the stored timetable, no GPS/network wait
-    const saved = await loadCheckIn()
     const resume = saved && !checkInExpired(saved, clock(), null) ? saved : null
-    if (saved && !resume) await saveCheckIn(null)
-    const first = resume
-      ? { containerTotalNum: 4, ...this.transitLayout() }
-      : { containerTotalNum: 3, textObject: this.messageTexts('Simple euro transit', 'Locating closest stops…', ' ') }
+    if (saved && !resume) void saveCheckIn(null)
+    // Otherwise open straight into the last departure board (if recent) while fresh data loads
+    const snapshot = resume ? false : this.restoreSnapshot()
+    let first: Partial<CreateStartUpPageContainer>
+    if (resume) first = { containerTotalNum: 4, ...this.transitLayout() }
+    else if (snapshot) {
+      const texts = this.boardTexts(this.boardContent(clock()), this.settings.map)
+      first = { containerTotalNum: texts.length + (this.settings.map ? 1 : 0), textObject: texts, ...(this.settings.map ? { imageObject: [this.mapImage()] } : {}) }
+      this.mode = 'board'
+      this.boardWithMap = this.settings.map
+    } else first = { containerTotalNum: 3, textObject: this.messageTexts('Simple euro transit', 'Locating closest stops…', ' ') }
+    mark('storage read')
     await serial(() => this.bridge.createStartUpPageContainer(new CreateStartUpPageContainer(first)))
+    this.remember(first.textObject)
+    mark(`${snapshot ? 'startup page (last board)' : resume ? 'startup page (journey)' : 'startup page'}, bridge calls before it: ${bridgeStats.calls - 1}`)
     this.started = true
+    if (snapshot) {
+      if (this.boardWithMap) void this.sendMap(true)
+      void this.loadBoard()
+    }
+    void this.loadStored(!!resume)
     this.unsubscribers.push(this.bridge.onEvenHubEvent((e) => void this.onEvent(e)))
     const resumed = !!resume
     if (resume) {
@@ -152,17 +182,82 @@ export class GlassesApp {
         void this.onFix()
       }),
     )
-    await this.startLocation()
-    const firstFix = mockFix
-      ? { latitude: mockFix.lat, longitude: mockFix.lng, accuracy: mockFix.accuracy }
-      : await this.bridge.getAppLocation({ accuracy: AppLocationAccuracy.High, timeoutMs: 8000 }).catch(() => null)
+    void this.startLocation()
+    const firstFix = mockFix ? { latitude: mockFix.lat, longitude: mockFix.lng, accuracy: mockFix.accuracy } : await this.quickFix()
+    mark('first fix')
     if (firstFix) {
       this.fix = { lat: firstFix.latitude, lng: firstFix.longitude, accuracy: firstFix.accuracy, timestamp: clock() }
       await this.onFix()
-    } else if (!this.fix && !resumed) {
+    } else if (!this.fix && !resumed && !snapshot) {
       await this.showMessage('No GPS fix yet', 'Waiting for location…\nCheck that the Even app may use your location.', 'loading')
     }
     this.timer = setInterval(() => void this.tick(), TICK_MS)
+    if (mockFix && jitterM) {
+      setInterval(() => {
+        const r = () => ((Math.random() * 2 - 1) * jitterM) / 111_000
+        this.fix = { lat: mockFix!.lat + r(), lng: mockFix!.lng + r(), accuracy: jitterM, timestamp: clock() }
+        void this.onFix()
+      }, 2000)
+    }
+    if (perf) setInterval(() => mark(`bridge calls ${bridgeStats.calls}, busy ${Math.round(bridgeStats.busyMs)} ms`), 10_000)
+  }
+
+  /** Authoritative targets, settings and check-in from the Even app storage (after the first frame). */
+  private async loadStored(resumed: boolean) {
+    const [targets, settings, saved] = await Promise.all([loadTargets(), loadSettings(), loadCheckIn()])
+    this.targets = targets.length ? targets : mockTargets
+    if (this.mode === 'targets') await this.showTargets()
+    if (JSON.stringify(settings) !== JSON.stringify(this.settings)) await this.setSettings(settings)
+    // Check-in only in the app storage (WebView data was reset): open it now
+    if (!resumed && !this.active && saved && !checkInExpired(saved, clock(), this.fix) && this.showsBoard()) {
+      this.active = saved
+      await this.showTransit()
+      void this.refreshTrip().then(() => this.renderTransit(true))
+    }
+  }
+
+  /** A coarse fix first (fast, enough to find nearby stops), the precise one if that fails.
+   *  Precise positions keep arriving through the location updates anyway. */
+  private async quickFix() {
+    const get = (accuracy: AppLocationAccuracy, timeoutMs: number) =>
+      this.bridge.getAppLocation({ accuracy, timeoutMs }).catch(() => null)
+    return (await get(AppLocationAccuracy.Medium, 2500)) ?? (this.fix ? null : await get(AppLocationAccuracy.High, 8000))
+  }
+
+  private saveSnapshot() {
+    try {
+      localStorage.setItem(
+        SNAPSHOT_KEY,
+        JSON.stringify({
+          at: clock(),
+          network: this.network.id,
+          fix: this.nearbyFix,
+          stations: this.stations,
+          stationIdx: this.stationIdx,
+          board: this.board,
+        }),
+      )
+    } catch {
+      // storage full or unavailable: the next start just waits for fresh data
+    }
+  }
+
+  /** Loads the last board into state; true if it is recent enough to show. */
+  private restoreSnapshot(): boolean {
+    try {
+      const s = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) ?? 'null')
+      if (!s?.stations?.length || !s.fix || clock() - s.at > SNAPSHOT_MAX_AGE_MS) return false
+      this.network = getNetwork(s.network)
+      this.stations = s.stations
+      this.stationIdx = Math.min(s.stationIdx ?? 0, s.stations.length - 1)
+      this.board = s.board ?? []
+      this.boardFetchedAt = s.at
+      this.nearbyFix = s.fix
+      this.fix = s.fix
+      return true
+    } catch {
+      return false
+    }
   }
 
   /** Location updates stop when the WebView is suspended, so this also runs on every resume. */
@@ -257,14 +352,24 @@ export class GlassesApp {
     return new ImageContainerProperty({ xPosition: MAP_X, yPosition: 38, width: MAP_W, height: MAP_H, containerID: 8, containerName: 'map' })
   }
 
+  private remember(texts: TextContainerProperty[] | undefined) {
+    this.shown.clear()
+    for (const t of texts ?? []) this.shown.set(t.containerName ?? '', t.content ?? ' ')
+  }
+
   private async rebuild(page: Partial<RebuildPageContainer>) {
     if (!this.started) return
     const total = (page.textObject?.length ?? 0) + (page.listObject?.length ?? 0) + (page.imageObject?.length ?? 0)
+    this.remember(page.textObject)
     await serial(() => this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: total, ...page })))
   }
 
   private async upgrade(id: number, name: string, content: string) {
     if (!this.started || !this.foreground) return
+    content = content || ' '
+    // Every update is a Bluetooth round trip: skip text that is already on screen
+    if (this.shown.get(name) === content) return
+    this.shown.set(name, content)
     await serial(() =>
       this.bridge.textContainerUpgrade(
         new TextContainerUpgrade({ containerID: id, containerName: name, content: content || ' ', contentOffset: 0, contentLength: 0 }),
@@ -313,9 +418,7 @@ export class GlassesApp {
     if (this.mode === 'transit') return this.renderTransit()
     const moved = !this.nearbyFix || distanceM(this.nearbyFix, this.fix) > NEARBY_REQUERY_M
     if (moved) await this.loadNearby()
-    else if (this.mode === 'board' && this.boardWithMap && (!this.mapFix || distanceM(this.mapFix, this.fix) >= MAP_REDRAW_M)) {
-      await this.renderBoard()
-    }
+    else if (this.mode === 'board') await this.renderBoard() // only changed text is sent; map is throttled
   }
 
   private async loadNearby() {
@@ -338,7 +441,9 @@ export class GlassesApp {
       this.nearbyFix = fix
       const keep = this.stations.findIndex((s) => s.id === prevId)
       this.stationIdx = keep >= 0 ? keep : 0
+      this.boardCache.clear()
       await this.loadBoard()
+      void this.prefetchBoards()
     } catch {
       this.boardError = 'Offline · retrying'
       if (this.showsBoard()) await this.renderBoard()
@@ -357,13 +462,30 @@ export class GlassesApp {
       return this.showsBoard() ? this.renderBoard() : undefined
     }
     try {
-      this.board = await this.network.stationboard(station.id, 15)
+      const entries = await this.network.stationboard(station.id, 15)
+      if (this.stations[this.stationIdx] !== station) return // swiped away meanwhile
+      this.board = entries
       this.boardFetchedAt = clock()
+      this.boardCache.set(station.id, { entries, at: this.boardFetchedAt })
       this.boardError = ''
+      this.saveSnapshot()
     } catch {
       this.boardError = 'Offline · retrying'
     }
     if (this.showsBoard()) await this.renderBoard()
+  }
+
+  /** Departures of the other nearby stops, one after the other, so swiping shows them at once. */
+  private async prefetchBoards() {
+    const network = this.network
+    for (const s of this.stations) {
+      if (!s.id || network !== this.network || this.boardCache.has(s.id)) continue
+      try {
+        this.boardCache.set(s.id, { entries: await network.stationboard(s.id, 15), at: clock() })
+      } catch {
+        return
+      }
+    }
   }
 
   /** Live distance (m) from the current fix to a stop, falling back to the API's value. */
@@ -378,7 +500,9 @@ export class GlassesApp {
     if (!station) {
       return { header: 'No stops nearby', columns: ['', '', 'No public transport stop found around you.', ''], mapInfo: ' ' }
     }
-    const metres = this.distanceTo(station)
+    const exact = this.distanceTo(station)
+    // Rounded so GPS jitter doesn't change the text (and cause an update) every few seconds
+    const metres = exact == null ? null : exact < 200 ? Math.round(exact / 10) * 10 : Math.round(exact / 50) * 50
     const dist = metres != null ? ` · ${Math.round(metres)} m` : ''
     const page = this.stations.length > 1 ? `  ${this.stationIdx + 1}/${this.stations.length}` : ''
     const header = `${truncate(withoutTown(station.name ?? '?'), 30)}${dist}${page}   ${hhmm(now)}`
@@ -399,29 +523,39 @@ export class GlassesApp {
   private async renderBoard(placeholder?: string) {
     const c = this.boardContent(clock(), placeholder)
     const withMap = this.settings.map
-    if (this.mode !== 'board' || this.boardWithMap !== withMap) {
+    const rebuilt = this.mode !== 'board' || this.boardWithMap !== withMap
+    if (rebuilt) {
       this.mode = 'board'
       this.boardWithMap = withMap
       this.mapKey = ''
       await this.rebuild({ textObject: this.boardTexts(c, withMap), ...(withMap ? { imageObject: [this.mapImage()] } : {}) })
+      mark('board on screen')
     } else {
       await this.upgrade(1, 'hdr', c.header)
       for (const [i, k] of BOARD_COLUMNS.entries()) await this.upgrade(i + 2, k.name, c.columns[i])
       if (withMap) await this.upgrade(7, 'mapinfo', c.mapInfo)
     }
-    if (withMap) void this.sendMap()
+    if (withMap) void this.sendMap(rebuilt)
     const net = this.network === swiss ? '' : ` (${this.network.name})`
     this.status(`Departures · ${this.stations[this.stationIdx]?.name ?? 'locating'}${net}`)
   }
 
-  /** Sends the map image when the stop list, the selected stop or your position changed. */
-  private async sendMap() {
-    if (this.mapBusy || !this.foreground || this.mode !== 'board' || !this.boardWithMap) return
+  /** Sends the map image when the stop list or the selected stop changed (at once), or when you
+   *  moved noticeably (throttled). force: the image container is new and still empty. */
+  private async sendMap(force = false) {
+    if (!this.foreground || this.mode !== 'board' || !this.boardWithMap) return
+    if (this.mapBusy) {
+      this.mapPending = true
+      return
+    }
     const station = this.stations[this.stationIdx]
-    const moved = !this.mapFix || !this.fix || distanceM(this.mapFix, this.fix) >= MAP_REDRAW_M
     const key = `${this.stations.map((s) => s.id).join(',')}#${this.stationIdx}`
-    if (!station || (key === this.mapKey && !moved)) return
+    const goodFix = !!this.fix && (this.fix.accuracy ?? 0) <= MAP_MAX_ACCURACY_M
+    const moved = goodFix && (!this.mapFix || distanceM(this.mapFix, this.fix!) >= MAP_REDRAW_M)
+    const due = clock() - this.mapSentAt >= MAP_MIN_INTERVAL_MS
+    if (!station || (!force && key === this.mapKey && !(moved && due))) return
     this.mapBusy = true
+    this.mapPending = false
     const fix = this.fix
     try {
       const png = await renderMapPng({
@@ -432,19 +566,31 @@ export class GlassesApp {
         selected: this.stationIdx,
       })
       if (this.mode !== 'board' || !this.boardWithMap) return
+      mark(`map rendered (${png.length} bytes)`)
       await serial(() => this.bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: 'map', imageData: png })), 10_000)
+      mark('map on screen')
       this.mapKey = key
       this.mapFix = fix
+      this.mapSentAt = clock()
     } catch {
       this.mapKey = '' // retry on the next tick
     } finally {
       this.mapBusy = false
     }
+    // A stop change during the transfer: send the newest state right away
+    if (this.mapPending) void this.sendMap()
   }
 
   private async switchStation(delta: number) {
     if (this.stations.length < 2) return
     this.stationIdx = (this.stationIdx + delta + this.stations.length) % this.stations.length
+    const id = this.stations[this.stationIdx].id
+    const cached = id ? this.boardCache.get(id) : undefined
+    if (cached && clock() - cached.at < BOARD_CACHE_MS) {
+      this.board = cached.entries
+      this.boardFetchedAt = cached.at
+      return this.renderBoard()
+    }
     this.board = []
     await this.renderBoard('Loading departures…')
     await this.loadBoard()
@@ -463,6 +609,13 @@ export class GlassesApp {
   }
 
   private async pickTarget(target: Target) {
+    // The position may still be the one from the last board snapshot: get a current one first
+    if (!mockFix && (!this.fix || clock() - (this.fix.timestamp ?? 0) > 5 * 60_000)) {
+      await this.showMessage(`→ ${target.label}`, 'Getting your position…')
+      const l = await this.quickFix()
+      if (l) this.fix = { lat: l.latitude, lng: l.longitude, accuracy: l.accuracy, timestamp: clock() }
+      else if (this.fix && clock() - (this.fix.timestamp ?? 0) > 5 * 60_000) this.fix = null
+    }
     if (!this.fix) {
       await this.showMessage('No GPS fix', 'Your position is needed to plan the trip.\nTap to go back.')
       return
