@@ -1,6 +1,6 @@
 # Store listing assets
 
-Upload in the developer portal: <https://hub.evenrealities.com> → Simple public transit → listing → product screenshots.
+Upload in the developer portal: <https://hub.evenrealities.com> → Simple transit → listing → product screenshots.
 The `evenhub` CLI cannot upload screenshots (it only updates name, tagline, description and icon).
 
 - `screenshots/`: for the listing. 576×288, glasses display on black.

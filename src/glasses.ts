@@ -210,7 +210,7 @@ export class GlassesApp {
       first = this.withClock({ textObject: texts, ...(this.settings.map ? { imageObject: [this.mapImage()] } : {}) })
       this.mode = 'board'
       this.boardWithMap = this.settings.map
-    } else first = this.withClock({ textObject: this.messageTexts('Simple public transit', 'Locating closest stops…', ' ') })
+    } else first = this.withClock({ textObject: this.messageTexts('Simple transit', 'Locating closest stops…', ' ') })
     await serial(() => this.bridge.createStartUpPageContainer(new CreateStartUpPageContainer(first)))
     this.page++
     this.remember(first.textObject)

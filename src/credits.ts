@@ -51,7 +51,7 @@ export const CREDITS: CreditGroup[] = [
     title: 'This app',
     items: [
       {
-        name: 'Simple public transit',
+        name: 'Simple transit',
         url: 'https://opensource.org/license/mit',
         usedFor: 'Source code of this app. Data and third-party software below keep their own licences.',
         licence: 'MIT License',
@@ -68,7 +68,7 @@ export const CREDITS: CreditGroup[] = [
         usedFor: 'Swiss timetable and real-time data (stops, departures, connections, delays, platforms), received through transport.opendata.ch.',
         licence: 'opentransportdata.swiss terms of use',
         licenceUrl: 'https://opentransportdata.swiss/en/terms-of-use/',
-        notice: 'Source: opentransportdata.swiss. The data is processed (filtered, shortened and combined for display) by Simple public transit.',
+        notice: 'Source: opentransportdata.swiss. The data is processed (filtered, shortened and combined for display) by Simple transit.',
       },
       {
         name: 'DELFI e.V. (opendata-oepnv.de)',
@@ -76,7 +76,7 @@ export const CREDITS: CreditGroup[] = [
         usedFor: 'Nationwide German timetable data, received through Transitous.',
         licence: 'CC BY 4.0',
         licenceUrl: 'https://creativecommons.org/licenses/by/4.0/',
-        notice: 'Contains data of DELFI e.V., licensed under CC BY 4.0. Changes: converted and combined with other sources by Transitous, filtered and shortened for display by Simple public transit.',
+        notice: 'Contains data of DELFI e.V., licensed under CC BY 4.0. Changes: converted and combined with other sources by Transitous, filtered and shortened for display by Simple transit.',
       },
       {
         name: 'Further sources via Transitous',

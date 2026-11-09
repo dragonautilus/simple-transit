@@ -1,4 +1,4 @@
-Simple public transit puts public transport on your Even G2, wherever Transitous has timetable data.
+Simple transit puts public transport on your Even G2, wherever Transitous has timetable data.
 
 - Departure board of the stops closest to you: minutes to departure, line, destination, platform and delay. Swipe to switch between nearby stops. A small street map shows where the stop is in relation to you, with distance, direction and walking time. Where departures leave from both sides of a street, the map marks each side with the same letter as the departures.
 - Preset targets (home, work, any stop or address), managed on the phone.

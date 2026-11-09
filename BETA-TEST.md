@@ -1,4 +1,4 @@
-# Simple public transit: private beta
+# Simple transit: private beta
 
 Tester account: `dominik.fahrni@gmail.com` (must be the account signed in to the Even Realities App on the test phone).
 
@@ -28,7 +28,7 @@ Then manually:
    npx evenhub ls com.dominikfahrni.simplepublictransit   # CHANNEL: beta
    npx evenhub testers                                   # status: Active
    ```
-3. Phone: **Even Realities App → Me → Beta tester → Simple public transit → Install**.
+3. Phone: **Even Realities App → Me → Beta tester → Simple transit → Install**.
 4. Allow location access when asked.
 
 ## 3. Test checklist
@@ -94,7 +94,7 @@ Check-in (long journeys)
 Lifecycle (what the Even QA review checks)
 - [ ] Lock the phone for **5 minutes** on the board, unlock: app still there and updating.
 - [ ] Same during navigation: progress continues, GPS ring returns.
-- [ ] Force-quit the Even app during navigation and relaunch Simple public transit: navigation resumes.
+- [ ] Force-quit the Even app during navigation and relaunch Simple transit: navigation resumes.
 - [ ] Double tap on the board → system exit dialog; Cancel keeps the app, Confirm exits.
 - [ ] Flight mode on the board: "Offline · retrying", recovers when back online.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds, uploads and promotes Simple public transit to the Even Hub beta channel and invites the
+# Builds, uploads and promotes Simple transit to the Even Hub beta channel and invites the
 # tester. Safe to re-run: existing app -> upload, existing tester -> skipped.
 #
 # Usage: scripts/beta-release.sh ["what changed"]
@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TESTER="dominik.fahrni@gmail.com"
-NAME="Simple public transit"
+NAME="Simple transit"
 TAGLINE="Live departures and transit on your glasses"
 CHANGES="${1:-Beta build}"
 

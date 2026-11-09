@@ -1,4 +1,4 @@
-<h1 align="center">Simple public transit</h1>
+<h1 align="center">Simple transit</h1>
 
 <p align="center">
   <b>Public transport on your Even Realities G2 glasses.</b><br>
