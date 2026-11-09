@@ -56,21 +56,31 @@ const LIST_ITEM_BYTES = 60
 const LIST_MAX_ITEMS = 20
 const CONFIRM_ITEMS = ['Continue journey', 'Close app · stay checked in', 'Check out'] as const
 const BOARD_FOOTER = '▲▼ other stops · tap: navigate · 2×: exit'
-const BOARD_COLUMNS = [
-  { name: 'when', x: 0, w: 70, capture: false },
-  { name: 'line', x: 70, w: 100, capture: false },
-  { name: 'dest', x: 170, w: 316, capture: true },
-  { name: 'info', x: 486, w: 90, capture: false },
-] as const
-/** Same columns, narrower, leaving room for the map on the right. */
+/** Clock in the top right corner of every page; headers end left of it. */
+const CLOCK_X = 520
+const CLOCK_W = 576 - CLOCK_X
+type BoardColumn = { name: keyof BoardRow; x: number; w: number; capture: boolean }
+const BOARD_COLUMNS: readonly BoardColumn[] = [
+  { name: 'time', x: 0, w: 62, capture: false },
+  { name: 'when', x: 62, w: 48, capture: false },
+  { name: 'line', x: 110, w: 92, capture: false },
+  { name: 'dest', x: 202, w: 286, capture: true },
+  { name: 'info', x: 488, w: 88, capture: false },
+]
+/** Narrower, leaving room for the map on the right. Without the departure time: there is no
+ *  room for it, and the page would need 9 text containers (the glasses allow 8). */
 const MAP_X = 576 - MAP_W
-const BOARD_COLUMNS_MAP = [
+const BOARD_COLUMNS_MAP: readonly BoardColumn[] = [
   { name: 'when', x: 0, w: 52, capture: false },
   { name: 'line', x: 52, w: 88, capture: false },
   { name: 'dest', x: 140, w: 190, capture: true },
   { name: 'info', x: 330, w: 102, capture: false },
-] as const
-const DEST_CHARS = 25
+]
+const boardColumns = (withMap: boolean) => (withMap ? BOARD_COLUMNS_MAP : BOARD_COLUMNS)
+/** Container ids after the columns (header is 1, columns start at 2). */
+const MAPINFO_ID = BOARD_COLUMNS_MAP.length + 3
+const MAP_ID = MAPINFO_ID + 1
+const DEST_CHARS = 23
 const DEST_CHARS_MAP = 15
 /** Redraw the map when you moved this far (m)… */
 const MAP_REDRAW_M = 25
@@ -97,7 +107,7 @@ const toFix = (l: AppLocation): Fix => ({ lat: l.latitude, lng: l.longitude, acc
 
 interface BoardContent {
   header: string
-  /** Newline-joined cells per column, same order as BOARD_COLUMNS. */
+  /** Newline-joined cells per column, same order as boardColumns(). */
   columns: string[]
   /** Text under the map: distance, direction and walking time to the stop. */
   mapInfo: string
@@ -157,6 +167,9 @@ export class GlassesApp {
   private imageSentAt = 0
   private lastRing = false
 
+  /** Id of the clock container on the current page (always the last one). */
+  private clockId = 0
+  private clockTimer: ReturnType<typeof setTimeout> | undefined
   private timer: ReturnType<typeof setInterval> | null = null
   private unsubscribers: (() => void)[] = []
 
@@ -176,13 +189,13 @@ export class GlassesApp {
     // Otherwise open straight into the last departure board (if recent) while fresh data loads
     const snapshot = resume ? false : this.restoreSnapshot()
     let first: Partial<CreateStartUpPageContainer>
-    if (resume) first = { containerTotalNum: 4, ...this.transitLayout() }
+    if (resume) first = this.withClock(this.transitLayout())
     else if (snapshot) {
       const texts = this.boardTexts(this.boardContent(clock()), this.settings.map)
-      first = { containerTotalNum: texts.length + (this.settings.map ? 1 : 0), textObject: texts, ...(this.settings.map ? { imageObject: [this.mapImage()] } : {}) }
+      first = this.withClock({ textObject: texts, ...(this.settings.map ? { imageObject: [this.mapImage()] } : {}) })
       this.mode = 'board'
       this.boardWithMap = this.settings.map
-    } else first = { containerTotalNum: 3, textObject: this.messageTexts('Simple euro transit', 'Locating closest stops…', ' ') }
+    } else first = this.withClock({ textObject: this.messageTexts('Simple euro transit', 'Locating closest stops…', ' ') })
     await serial(() => this.bridge.createStartUpPageContainer(new CreateStartUpPageContainer(first)))
     this.page++
     this.remember(first.textObject)
@@ -219,6 +232,7 @@ export class GlassesApp {
       await this.showMessage('No GPS fix yet', 'Waiting for location…\nCheck that the Even app may use your location.', 'loading')
     }
     this.timer = setInterval(() => void this.tick().catch(() => undefined), TICK_MS)
+    this.scheduleClock()
     startDevHooks(
       (fix) => {
         this.fix = fix
@@ -320,6 +334,8 @@ export class GlassesApp {
   private stop() {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    clearTimeout(this.clockTimer)
+    this.clockTimer = undefined
     this.unsubscribers.forEach((u) => u())
     this.unsubscribers = []
     void this.bridge.stopAppLocationUpdates().catch(() => false)
@@ -348,9 +364,30 @@ export class GlassesApp {
     })
   }
 
+  /** Adds the clock as the last container and sets the container count. */
+  private withClock<P extends { textObject?: TextContainerProperty[]; listObject?: unknown[]; imageObject?: unknown[] }>(page: P) {
+    const others = (page.textObject?.length ?? 0) + (page.listObject?.length ?? 0) + (page.imageObject?.length ?? 0)
+    this.clockId = others + 1
+    const t = this.text(this.clockId, 'clock', 0, 36, hhmm(clock()), false, { xPosition: CLOCK_X, width: CLOCK_W })
+    return { ...page, textObject: [...(page.textObject ?? []), t], containerTotalNum: others + 1 }
+  }
+
+  /** Redraws right after every minute change, so the clock and the "departs in" minutes agree. */
+  private scheduleClock() {
+    clearTimeout(this.clockTimer)
+    this.clockTimer = setTimeout(() => {
+      void this.tick().catch(() => undefined)
+      this.scheduleClock()
+    }, 60_000 - (clock() % 60_000) + 200)
+  }
+
+  private async updateClock() {
+    if (this.clockId) await this.upgrade(this.clockId, 'clock', hhmm(clock()))
+  }
+
   private messageTexts(header: string, body: string, footer: string) {
     return [
-      this.text(1, 'hdr', 0, 36, header),
+      this.text(1, 'hdr', 0, 36, truncate(header, 38), false, { width: CLOCK_X }),
       this.text(2, 'body', 36, 216, body, true),
       this.text(3, 'foot', 252, 36, footer, false, { textColor: 2 }),
     ]
@@ -361,20 +398,20 @@ export class GlassesApp {
   private boardTexts(c: BoardContent, withMap: boolean) {
     const col = (id: number, name: string, x: number, w: number, content: string, capture = false) =>
       this.text(id, name, 36, 216, content, capture, { xPosition: x, width: w })
-    const columns = withMap ? BOARD_COLUMNS_MAP : BOARD_COLUMNS
+    const columns = boardColumns(withMap)
     const texts = [
-      this.text(1, 'hdr', 0, 36, c.header),
+      this.text(1, 'hdr', 0, 36, c.header, false, { width: CLOCK_X }),
       ...columns.map((k, i) => col(i + 2, k.name, k.x, k.w, c.columns[i], k.capture)),
-      this.text(6, 'foot', 252, 36, BOARD_FOOTER, false, { textColor: 2 }),
+      this.text(columns.length + 2, 'foot', 252, 36, BOARD_FOOTER, false, { textColor: 2 }),
     ]
     if (withMap) {
-      texts.push(this.text(7, 'mapinfo', 36 + MAP_H + 2, 216 - MAP_H - 2, c.mapInfo, false, { xPosition: MAP_X, width: MAP_W }))
+      texts.push(this.text(MAPINFO_ID, 'mapinfo', 36 + MAP_H + 2, 216 - MAP_H - 2, c.mapInfo, false, { xPosition: MAP_X, width: MAP_W }))
     }
     return texts
   }
 
   private mapImage() {
-    return new ImageContainerProperty({ xPosition: MAP_X, yPosition: 38, width: MAP_W, height: MAP_H, containerID: 8, containerName: 'map' })
+    return new ImageContainerProperty({ xPosition: MAP_X, yPosition: 38, width: MAP_W, height: MAP_H, containerID: MAP_ID, containerName: 'map' })
   }
 
   /** Records what a new page shows, so upgrade() can skip unchanged text. */
@@ -386,10 +423,10 @@ export class GlassesApp {
   /** False if the glasses refused the page; the previous page then stays on screen. */
   private async rebuild(page: Partial<RebuildPageContainer>): Promise<boolean> {
     if (!this.started) return false
-    const total = (page.textObject?.length ?? 0) + (page.listObject?.length ?? 0) + (page.imageObject?.length ?? 0)
-    this.remember(page.textObject)
+    const full = this.withClock(page)
+    this.remember(full.textObject)
     this.page++
-    const ok = await serial(() => this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: total, ...page })))
+    const ok = await serial(() => this.bridge.rebuildPageContainer(new RebuildPageContainer(full)))
     if (!ok) mark('page refused by the glasses')
     return ok
   }
@@ -431,7 +468,7 @@ export class GlassesApp {
     const footer = mode === 'message' ? 'tap: back' : ' '
     if (!sameLayout) await this.rebuild({ textObject: this.messageTexts(header, body, footer) })
     else {
-      await this.upgrade(1, 'hdr', header)
+      await this.upgrade(1, 'hdr', truncate(header, 38))
       await this.upgrade(2, 'body', body)
       await this.upgrade(3, 'foot', footer)
     }
@@ -440,7 +477,7 @@ export class GlassesApp {
   private async showList(header: string, items: string[]): Promise<boolean> {
     const names = items.slice(0, LIST_MAX_ITEMS).map((s) => fitBytes(s, LIST_ITEM_BYTES))
     return this.rebuild({
-      textObject: [this.text(1, 'hdr', 0, 40, header)],
+      textObject: [this.text(1, 'hdr', 0, 40, header, false, { width: CLOCK_X })],
       listObject: [
         new ListContainerProperty({
           xPosition: 0,
@@ -552,7 +589,7 @@ export class GlassesApp {
     const metres = exact == null ? null : exact < 200 ? Math.round(exact / 10) * 10 : Math.round(exact / 50) * 50
     const dist = metres != null ? ` · ${metres} m` : ''
     const page = this.stations.length > 1 ? `  ${this.stationIdx + 1}/${this.stations.length}` : ''
-    const header = `${truncate(withoutTown(station.name ?? '?'), 30)}${dist}${page}   ${hhmm(now)}`
+    const header = `${truncate(withoutTown(station.name ?? '?'), 26)}${dist}${page}`
     const c = station.coordinate
     const where = metres != null && this.fix && c?.x != null && c.y != null ? `${metres} m ${compass(this.fix, { lat: c.x, lng: c.y })}` : ' '
     const walk = metres != null ? `${Math.max(1, Math.round(metres / WALK_M_PER_MIN))}' walk` : ' '
@@ -564,7 +601,7 @@ export class GlassesApp {
     const extra = [note, this.boardError].filter(Boolean)
     const column = (k: keyof BoardRow) =>
       [...rows.map((r) => r[k]), ...extra.map((e) => (k === 'dest' ? e : ' '))].slice(0, BOARD_ROWS).join('\n')
-    return { header, columns: [column('when'), column('line'), column('dest'), column('info')], mapInfo }
+    return { header, columns: boardColumns(this.settings.map).map((k) => column(k.name)), mapInfo }
   }
 
   private async renderBoard(placeholder?: string) {
@@ -578,8 +615,8 @@ export class GlassesApp {
       await this.rebuild({ textObject: this.boardTexts(c, withMap), ...(withMap ? { imageObject: [this.mapImage()] } : {}) })
     } else {
       await this.upgrade(1, 'hdr', c.header)
-      for (const [i, { name }] of BOARD_COLUMNS.entries()) await this.upgrade(i + 2, name, c.columns[i])
-      if (withMap) await this.upgrade(7, 'mapinfo', c.mapInfo)
+      for (const [i, { name }] of boardColumns(withMap).entries()) await this.upgrade(i + 2, name, c.columns[i])
+      if (withMap) await this.upgrade(MAPINFO_ID, 'mapinfo', c.mapInfo)
     }
     if (withMap) void this.sendMap(rebuilt)
     const net = this.network === swiss ? '' : ` (${this.network.name})`
@@ -621,7 +658,7 @@ export class GlassesApp {
       })
       if (this.mode !== 'board' || !this.boardWithMap) return
       // Page changed while waiting: the next board page sends its own map
-      sent = await this.sendImage(8, 'map', png)
+      sent = await this.sendImage(MAP_ID, 'map', png)
       if (!sent) return
       this.mapKey = key
       this.mapFix = fix
@@ -661,7 +698,7 @@ export class GlassesApp {
   private async showTargets() {
     this.mode = 'targets'
     if (this.targets.length === 0) {
-      await this.showList('No targets yet · add them in the phone app', [BACK])
+      await this.showList('No targets · add them in the phone app', [BACK])
     } else {
       await this.showList('Navigate to…', [...this.targets.map((t) => `→ ${t.label}`), BACK])
     }
@@ -699,7 +736,7 @@ export class GlassesApp {
       await this.showMessage(`→ ${target.label}`, 'No connection found (or offline).\nTap to go back.')
       return
     }
-    const shown = await this.showList(`→ ${truncate(target.label, 24)} · pick a connection`, [
+    const shown = await this.showList(`→ ${truncate(target.label, 20)} · pick a connection`, [
       ...this.options.map((o) => connectionItem(o.trip)),
       BACK,
     ])
@@ -725,8 +762,10 @@ export class GlassesApp {
   private transitLayout() {
     return {
       textObject: [
-        this.text(1, 'hdr', 0, 64, ' '),
+        // Two containers, so the first line ends left of the clock and the second gets the full width
+        this.text(1, 'hdr', 0, 32, ' ', false, { width: CLOCK_X, paddingLength: 2 }),
         this.text(2, 'steps', 136, 152, ' ', true, { paddingLength: 2 }),
+        this.text(5, 'action', 32, 32, ' ', false, { paddingLength: 2 }),
       ],
       imageObject: [
         new ImageContainerProperty({ xPosition: 0, yPosition: 64, width: HALF_W, height: LINE_H, containerID: 3, containerName: 'lineL' }),
@@ -771,7 +810,6 @@ export class GlassesApp {
     const p = estimateProgress(a.trip, now, this.fix)
 
     const action = p.arrived ? `${nextAction(a.trip, p, now)} Tap: check out` : nextAction(a.trip, p, now)
-    const header = `${tripHeader(a.target.label, a.trip, now)}\n${truncate(action, 52)}`
     const { lines, currentLine } = tripSteps(a.trip, p)
     // Text must fit the container; overflowing text scrolls inside the firmware and eats swipes
     const rows = lines.length > STEP_ROWS ? STEP_ROWS - 1 : STEP_ROWS
@@ -796,7 +834,8 @@ export class GlassesApp {
       void this.sendImages()
     }
 
-    await this.upgrade(1, 'hdr', header)
+    await this.upgrade(1, 'hdr', tripHeader(a.target.label, a.trip, now))
+    await this.upgrade(5, 'action', truncate(action, 52))
     await this.upgrade(2, 'steps', steps)
     this.status(`${a.target.label}: ${nextAction(a.trip, p, now)}`)
   }
@@ -851,6 +890,7 @@ export class GlassesApp {
   private async tick() {
     if (!this.foreground) return
     const now = clock()
+    await this.updateClock()
     if (this.mode === 'board') {
       if (now - this.boardFetchedAt > BOARD_REFRESH_MS) await this.loadBoard()
       else await this.renderBoard()
@@ -936,7 +976,7 @@ export class GlassesApp {
         return this.showTargets()
       case 'transit':
         this.mode = 'confirmStop'
-        await this.showList(`Checked in → ${truncate(this.active?.target.label ?? '', 30)}`, [...CONFIRM_ITEMS])
+        await this.showList(`Checked in → ${truncate(this.active?.target.label ?? '', 26)}`, [...CONFIRM_ITEMS])
         return
       case 'confirmStop':
         return this.showTransit()

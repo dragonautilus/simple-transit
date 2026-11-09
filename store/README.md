@@ -6,7 +6,7 @@ The `evenhub` CLI cannot upload screenshots (it only updates name, tagline, desc
 - `screenshots/`: for the listing. 576×288, glasses display on black.
 - `raw/`: the original simulator output (RGBA, transparent background), as captured.
 
-Captured from the Even Hub simulator (`/api/screenshot/glasses`) with live timetable data on 2026-11-04, as the
+Captured from the Even Hub simulator (`/api/screenshot/glasses`) with live timetable data on 2026-11-09, as the
 submission guidelines ask ("Screenshots match what the app actually renders on device").
 To redo the black versions after new captures: `node scripts/flatten-screenshots.mjs store/raw store/screenshots`.
 

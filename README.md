@@ -52,7 +52,9 @@ Captured from the Even Hub simulator with live timetable data (576 × 288 px, th
 ## Features
 
 - **Departure board** of the closest stops (GPS): minutes to departure, line, destination,
-  platform, delay. Swipe to switch between nearby stops.
+  platform, delay. Without the map, the departure time gets its own column too. Swipe to switch
+  between nearby stops.
+- **Clock** in the top right corner of every screen.
 - **Street map** next to the board: you, the selected stop, the other stops nearby, distance,
   direction and walking time.
 - **Navigation** to preset targets (home, work, any stop or address) set up on the phone: pick a

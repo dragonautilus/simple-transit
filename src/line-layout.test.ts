@@ -55,10 +55,23 @@ describe('boardRows', () => {
     const rows = boardRows(entries, 'Zürich HB', first - 3 * 60_000, 7)
     expect(rows).toHaveLength(7)
     for (const r of rows) {
-      expect(r.when).toMatch(/^(now|\d+'|\d\d:\d\d)$/)
+      expect(r.time).toMatch(/^\d\d:\d\d$/)
+      expect(r.when).toMatch(/^(now|\d+'|\d+h)$/)
       expect(r.line.length).toBeGreaterThan(0)
       expect(r.dest).toMatch(/^→ \S/)
     }
     expect(rows[0].info).toContain(entries[0].stop.platform!)
+    expect(rows[0].when).toBe("3'")
+  })
+
+  it('keeps "departs in" short for departures far ahead', () => {
+    const at = (min: number) => boardRows(entries, 'Zürich HB', first - min * 60_000, 1)[0].when
+    expect(at(99)).toBe("99'")
+    expect(at(100)).toBe('2h')
+    expect(at(200)).toBe('3h')
+  })
+
+  it('leaves out departures more than a day ahead', () => {
+    expect(boardRows(entries, 'Zürich HB', first - 25 * 3_600_000, 7)).toHaveLength(0)
   })
 })

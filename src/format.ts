@@ -62,15 +62,22 @@ export function shortStop(name: string, context?: string): string {
 
 // ---------- Departure board ----------
 
+/** Departures further ahead than this are left off the board. */
+const BOARD_HORIZON_MS = 24 * 3_600_000
+
 export interface BoardRow {
+  /** Scheduled departure time; a delay shows in `info`. */
+  time: string
+  /** Time left until the (delay-adjusted) departure. */
   when: string
   line: string
   dest: string
   info: string
 }
 
-/** One row per departure; rendered as aligned columns (time · line · → destination · platform/delay). */
-export function boardRows(entries: StationboardEntry[], stationName: string, now: number, max: number, destChars = 25): BoardRow[] {
+/** One row per departure; rendered as aligned columns (time · departs in · line · → destination · platform/delay).
+ *  `when` stays short ("85'", "2h") so it fits the narrow column of the map layout too. */
+export function boardRows(entries: StationboardEntry[], stationName: string, now: number, max: number, destChars = 23): BoardRow[] {
   const parse = (iso: string | null | undefined) => parseTime(iso) ?? NaN
   return entries
     .map((e) => {
@@ -78,16 +85,18 @@ export function boardRows(entries: StationboardEntry[], stationName: string, now
       const prog = parse(e.stop.prognosis?.departure)
       const delayMin = e.stop.delay ?? 0
       const eff = !Number.isNaN(prog) ? prog : sched + delayMin * 60_000
-      return { e, eff, delayMin: Math.max(0, Math.round((eff - sched) / 60_000)) }
+      return { e, sched, eff, delayMin: Math.max(0, Math.round((eff - sched) / 60_000)) }
     })
-    .filter((r) => !Number.isNaN(r.eff) && r.eff >= now - 30_000)
+    // Some feeds return departures weeks ahead when a line is suspended: not useful on a live board
+    .filter((r) => !Number.isNaN(r.eff) && r.eff >= now - 30_000 && r.eff <= now + BOARD_HORIZON_MS)
     .sort((a, b) => a.eff - b.eff)
     .slice(0, max)
-    .map(({ e, eff, delayMin }) => {
+    .map(({ e, sched, eff, delayMin }) => {
       const mins = minutesUntil(eff, now)
       const plat = e.stop.prognosis?.platform ?? e.stop.platform
       return {
-        when: mins <= 0 ? 'now' : mins < 60 ? `${mins}'` : hhmm(eff),
+        time: hhmm(Number.isNaN(sched) ? eff : sched),
+        when: mins <= 0 ? 'now' : mins < 100 ? `${mins}'` : `${Math.round(mins / 60)}h`,
         line: truncate(lineName(e.category, e.number), 8),
         dest: `→ ${truncate(shortStop(e.to, stationName), destChars)}`,
         info: [plat, delayMin > 0 ? `+${delayMin}'` : ''].filter(Boolean).join(' '),
@@ -113,7 +122,8 @@ export function tripHeader(targetName: string, trip: Trip, now: number): string 
   const last = trip.legs[trip.legs.length - 1]
   const left = trip.end - now
   const eta = left > 0 ? ` · ${duration(left)} left` : ''
-  return truncate(`→ ${targetName}  arr ${last ? time(last.to) : '?'}${eta}`, LINE_CHARS + 4)
+  // Leaves room for the clock in the top right corner
+  return truncate(`→ ${targetName}  arr ${last ? time(last.to) : '?'}${eta}`, LINE_CHARS - 6)
 }
 
 /** The single most important instruction right now. */
