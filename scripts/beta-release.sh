@@ -15,7 +15,7 @@ CHANGES="${1:-Beta build}"
 
 PKG=$(node -p "require('./app.json').package_id")
 VERSION=$(node -p "require('./app.json').version")
-EHPK="simple-public-transit.ehpk"
+EHPK="simple-transit.ehpk"
 evenhub() { npx --no-install evenhub "$@"; }
 
 echo "== $NAME $VERSION ($PKG)"

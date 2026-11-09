@@ -17,7 +17,7 @@ Tester account: `dominik.fahrni@gmail.com` (must be the account signed in to the
 scripts/beta-release.sh "what changed"
 ```
 
-It type-checks, runs the tests, builds `icon.png` and `simple-public-transit.ehpk`, creates the app (first run) or uploads a new version, promotes it to **beta** and invites the tester.
+It type-checks, runs the tests, builds `icon.png` and `simple-transit.ehpk`, creates the app (first run) or uploads a new version, promotes it to **beta** and invites the tester.
 For every later build raise `"version"` in `app.json` first (currently `0.7.0`, next e.g. `0.7.1`); a version number can only be uploaded once.
 
 Then manually:
@@ -25,7 +25,7 @@ Then manually:
 1. Open the invitation email on `dominik.fahrni@gmail.com` and accept it.
 2. Check that both gates hold (otherwise the phone says "test version expired"):
    ```bash
-   npx evenhub ls com.dominikfahrni.simplepublictransit   # CHANNEL: beta
+   npx evenhub ls com.dominikfahrni.simpletransit   # CHANNEL: beta
    npx evenhub testers                                   # status: Active
    ```
 3. Phone: **Even Realities App → Me → Beta tester → Simple transit → Install**.

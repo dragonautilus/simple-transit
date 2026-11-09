@@ -88,7 +88,7 @@ npm run dev          # Vite dev server on port 5173
 npm run sim          # Even Hub simulator, opens the dev server with a fixed Zürich position
 npm test             # unit tests (vitest)
 npm run build        # type check + production build into dist/
-npm run pack         # build + simple-public-transit.ehpk
+npm run pack         # build + simple-transit.ehpk
 ```
 
 On real glasses during development: `npm run dev`, then `npx evenhub qr --url http://<your-lan-ip>:5173`
