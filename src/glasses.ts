@@ -59,7 +59,7 @@ const LIST_MAX_ITEMS = 20
 const CONFIRM_ITEMS = ['Continue journey', 'Close app · stay checked in', 'Check out'] as const
 const BOARD_FOOTER = '▲▼ other stops · tap: navigate · 2×: exit'
 /** Clock in the top right corner of every page; headers end left of it. */
-const CLOCK_X = 520
+const CLOCK_X = 500
 const CLOCK_W = 576 - CLOCK_X
 type BoardColumn = { name: keyof BoardRow; x: number; w: number; capture: boolean }
 const BOARD_COLUMNS: readonly BoardColumn[] = [
@@ -221,7 +221,7 @@ export class GlassesApp {
       void this.loadBoard().then(() => this.prefetchBoards())
     }
     if (!resume) void this.loadStored(false)
-    this.unsubscribers.push(this.bridge.onEvenHubEvent((e) => void this.onEvent(e).catch(() => undefined)))
+    this.unsubscribers.push(this.bridge.onEvenHubEvent((e) => void this.onEvent(e).catch((err) => this.failed(err))))
     if (resume) {
       this.active = resume
       this.enterTransitMode()
@@ -266,7 +266,7 @@ export class GlassesApp {
     if (!resumed && !this.active && saved && !checkInExpired(saved, clock(), this.fix) && this.showsBoard()) {
       // Checked in, but the WebView mirror was reset
       this.active = saved
-      await this.showTransit()
+      await this.showTransit().catch((err) => this.failed(err))
       void this.refreshTrip().then(() => this.renderTransit(true))
     }
   }
@@ -324,6 +324,14 @@ export class GlassesApp {
     await this.bridge
       .startAppLocationUpdates({ accuracy: AppLocationAccuracy.High, intervalMs: 5000, distanceFilter: 10 })
       .catch(() => false)
+  }
+
+  /** An error after a tap: shown with its text instead of leaving a blank or half-built page. */
+  private async failed(err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    mark(`error: ${msg}`)
+    if (this.mode === 'message') return // the message page itself failed: nothing better to show
+    await this.showMessage('Something went wrong', `${truncate(msg, 140)}\nTap to go back.`).catch(() => undefined)
   }
 
   /** From the phone app. */
@@ -860,7 +868,7 @@ export class GlassesApp {
   private async showTransit() {
     if (!this.active) return this.renderBoard()
     this.enterTransitMode()
-    await this.rebuild(this.transitLayout())
+    if (!(await this.rebuild(this.transitLayout()))) throw new Error('The glasses refused the journey page.')
     await this.renderTransit(true)
   }
 
@@ -1032,7 +1040,8 @@ export class GlassesApp {
       case 'board':
         return this.showTargets()
       case 'message':
-        return this.renderBoard()
+        // Back to the journey when checked in, else to the board
+        return this.active ? this.showTransit() : this.renderBoard()
       case 'transit':
         if (this.active?.trip && estimateProgress(this.active.trip, clock(), this.fix).arrived) {
           return this.endTransit()
