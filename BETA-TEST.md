@@ -18,7 +18,7 @@ scripts/beta-release.sh "what changed"
 ```
 
 It type-checks, runs the tests, builds `icon.png` and `simple-euro-transit.ehpk`, creates the app (first run) or uploads a new version, promotes it to **beta** and invites the tester.
-For every later build raise `"version"` in `app.json` first (currently `0.5.0`, next e.g. `0.5.1`); a version number can only be uploaded once.
+For every later build raise `"version"` in `app.json` first (currently `0.6.0`, next e.g. `0.6.1`); a version number can only be uploaded once.
 
 Then manually:
 
@@ -42,7 +42,7 @@ Data sources & licences (phone)
 - [ ] Glasses map shows "© OSM" in the top right corner (readable?).
 
 Settings (phone)
-- [ ] Network "Automatic" picks Switzerland in CH and Germany & Europe elsewhere; forcing a network reloads the board.
+- [ ] Network "Automatic" picks Switzerland & cross-border in CH and Germany & Europe elsewhere; forcing a network reloads the board.
 - [ ] Map checkbox off → board uses the full width; on → map is back.
 
 Speed (0.3.1)

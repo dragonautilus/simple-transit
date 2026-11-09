@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error Node types are not installed; vitest runs this file in Node
 import { readFileSync } from 'node:fs'
-import { compass, computeView, metresPerPx, project, scaleBar } from './board-map'
+import { compass, computeView, metresPerPx, project, scaleBar, spreadApart } from './board-map'
 import { decodeTile } from './mvt'
 
 describe('vector tile decoder', () => {
@@ -49,5 +49,20 @@ describe('map view', () => {
     expect(compass(me, { lat: 47.3782, lng: 8.55 })).toBe('E')
     expect(scaleBar(2)).toBe(100)
     expect(metresPerPx(0)).toBeCloseTo(2.39, 1)
+  })
+})
+
+describe('platform boxes', () => {
+  it('pushes overlapping boxes apart and leaves separate ones alone', () => {
+    const boxes = [
+      { x: 50, y: 50, w: 15 },
+      { x: 54, y: 46, w: 15 },
+      { x: 120, y: 120, w: 15 },
+    ]
+    spreadApart(boxes)
+    const [a, b, c] = boxes
+    expect(Math.abs(b.x - a.x) >= 18 || Math.abs(b.y - a.y) >= 18).toBe(true)
+    expect(b.x).toBeGreaterThan(a.x) // order kept: B stays east of A
+    expect(c).toEqual({ x: 120, y: 120, w: 15 })
   })
 })

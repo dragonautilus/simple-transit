@@ -6,13 +6,13 @@ The `evenhub` CLI cannot upload screenshots (it only updates name, tagline, desc
 - `screenshots/`: for the listing. 576×288, glasses display on black.
 - `raw/`: the original simulator output (RGBA, transparent background), as captured.
 
-Captured from the Even Hub simulator (`/api/screenshot/glasses`) with live timetable data on 2026-11-09, as the
+Captured from the Even Hub simulator (`/api/screenshot/glasses`) with live timetable data on 2026-11-09 (01: with platform labels, later the same day), as the
 submission guidelines ask ("Screenshots match what the app actually renders on device").
 To redo the black versions after new captures: `node scripts/flatten-screenshots.mjs store/raw store/screenshots`.
 
 | File | Caption |
 |---|---|
-| 01-departures-zurich.png | Departures of the closest stop with line, destination, platform and delay, plus a street map showing where the stop is. |
+| 01-departures-zurich.png | Departures of the closest stop with line, destination, platform and delay, plus a street map showing where the stop is and which side of the street each departure leaves from. |
 | 02-departures-berlin.png | Works in Germany too: S-Bahn, U-Bahn, tram and bus in Berlin. |
 | 03-targets.png | Your preset targets, set up in the phone app. |
 | 04-connections.png | Pick a connection: times, duration, changes and lines. |

@@ -20,11 +20,13 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import type * as api from './api'
 import { DEFAULT_SETTINGS, bridgeStats, cachedSettings, loadSettings, loadTargets, serial, type Settings, type Target } from './bridge'
-import { fallbackNetwork, getNetwork, networkFor, swiss, type Network } from './networks'
+import { NETWORKS, candidates, getNetwork, isDown, markDown, networkFor, opendata, type Network } from './networks'
 import { MAP_H, MAP_W, compass, renderMapPng } from './map/board-map'
+import { assignPlatforms, cachedTable, loadSwissTable, swissPosition, transitousPosition, type PlatformInfo } from './map/platforms'
 import { cachedCheckIn, checkInExpired, loadCheckIn, saveCheckIn, type CheckIn } from './checkin'
 import {
   boardRows,
+  shownDepartures,
   connectionItem,
   hhmm,
   localDate,
@@ -89,6 +91,8 @@ const MAP_MIN_INTERVAL_MS = 15_000
 /** While swiping through stops, the map waits until you pause, so the Bluetooth link isn't busy
  *  with maps of stops you skip past. */
 const MAP_SWIPE_SETTLE_MS = 700
+/** How long the first map of a Swiss stop waits for its platforms (ms). */
+const PLATFORM_WAIT_MS = 2500
 /** Fixes less accurate than this (m) don't move the map dot (GPS warming up). */
 const MAP_MAX_ACCURACY_M = 60
 /** Last departure board, shown instantly on the next start while fresh data loads. */
@@ -104,6 +108,15 @@ const WALK_M_PER_MIN = 75
 const FALLBACK_M = 1500
 
 const toFix = (l: AppLocation): Fix => ({ lat: l.latitude, lng: l.longitude, accuracy: l.accuracy, timestamp: l.timestamp ?? clock() })
+
+interface ConnectionOption {
+  trip: Trip
+  query: api.ConnectionQuery
+  /** Network the query (stop ids) belongs to: the target's own, or another one after a failure. */
+  network: Network
+}
+
+const COORDS = /^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/
 
 interface BoardContent {
   header: string
@@ -132,7 +145,9 @@ export class GlassesApp {
   private board: api.StationboardEntry[] = []
   private settings: Settings = DEFAULT_SETTINGS
   /** Network of the departure board (targets carry their own). */
-  private network: Network = swiss
+  private network: Network = opendata
+  /** The board uses another network because the chosen one failed; switch back once it may work again. */
+  private failover = false
   /** Board layout currently on screen: with or without map. */
   private boardWithMap = false
   private mapKey = ''
@@ -155,7 +170,7 @@ export class GlassesApp {
 
   private targets: Target[] = []
   private pendingTarget: Target | null = null
-  private options: { trip: Trip; query: api.ConnectionQuery }[] = []
+  private options: ConnectionOption[] = []
   /** Checked-in journey: shown in transit mode and restored on the next app start. */
   private active: CheckIn | null = null
   private stepOffset = 0
@@ -295,6 +310,8 @@ export class GlassesApp {
       this.boardFetchedAt = s.at
       this.nearbyFix = s.fix
       this.fix = s.fix
+      // Saved while another network stood in: return to the chosen one once it answers
+      this.failover = this.network !== networkFor(this.settings.network, s.fix.lat, s.fix.lng)
       return true
     } catch {
       return false
@@ -508,30 +525,35 @@ export class GlassesApp {
   private async loadNearby() {
     if (!this.fix) return
     const fix = this.fix
-    try {
-      const prevId = this.stations[this.stationIdx]?.id
-      let network = networkFor(this.settings.network, fix.lat, fix.lng)
-      let stations = await network.nearbyStations(fix.lat, fix.lng)
-      const fallback = this.settings.network === 'auto' ? fallbackNetwork(network, fix.lat, fix.lng) : null
-      if (fallback && (stations.length === 0 || (stations[0].distance ?? 0) > FALLBACK_M)) {
-        const other = await fallback.nearbyStations(fix.lat, fix.lng).catch(() => [])
-        if (other.length > 0 && (stations.length === 0 || (other[0].distance ?? Infinity) < (stations[0].distance ?? Infinity))) {
-          network = fallback
-          stations = other
-        }
+    const now = clock()
+    const prevId = this.stations[this.stationIdx]?.id
+    // The chosen network first; the next one when it fails or (automatic mode) finds no stop close by
+    let best: { network: Network; stations: api.Location[] } | null = null
+    for (const network of candidates(this.settings.network, fix.lat, fix.lng, now)) {
+      const closeEnough = best && best.stations.length > 0 && (best.stations[0].distance ?? 0) <= FALLBACK_M
+      if (best && (closeEnough || this.settings.network !== 'auto')) break
+      try {
+        const stations = await network.nearbyStations(fix.lat, fix.lng)
+        const closer = !best || (stations.length > 0 && (best.stations.length === 0 || (stations[0].distance ?? Infinity) < (best.stations[0].distance ?? Infinity)))
+        if (closer) best = { network, stations }
+      } catch {
+        markDown(network, clock())
       }
-      this.network = network
-      this.stations = stations
-      this.nearbyFix = fix
-      const keep = this.stations.findIndex((s) => s.id === prevId)
-      this.stationIdx = keep >= 0 ? keep : 0
-      this.boardCache.clear()
-      await this.loadBoard()
-      void this.prefetchBoards()
-    } catch {
+    }
+    if (!best) {
       this.boardError = 'Offline · retrying'
       if (this.showsBoard()) await this.renderBoard()
+      return
     }
+    this.network = best.network
+    this.failover = isDown(networkFor(this.settings.network, fix.lat, fix.lng), clock())
+    this.stations = best.stations
+    this.nearbyFix = fix
+    const keep = this.stations.findIndex((s) => s.id === prevId)
+    this.stationIdx = keep >= 0 ? keep : 0
+    this.boardCache.clear()
+    await this.loadBoard()
+    void this.prefetchBoards()
   }
 
   /** Board is on screen, or the startup/loading page that the board replaces. */
@@ -554,6 +576,10 @@ export class GlassesApp {
       this.boardError = ''
       this.saveSnapshot()
     } catch {
+      // Another network may still work: switch the board to its stops
+      markDown(this.network, clock())
+      const other = this.fix && candidates(this.settings.network, this.fix.lat, this.fix.lng, clock()).some((n) => !isDown(n, clock()))
+      if (other) return this.loadNearby()
       this.boardError = 'Offline · retrying'
     }
     if (this.showsBoard()) await this.renderBoard()
@@ -596,7 +622,7 @@ export class GlassesApp {
     // The map image takes seconds over Bluetooth, text is instant
     const mapInfo = `${where}\n${this.mapKey === this.mapKeyNow() ? walk : 'Map updating…'}`
     const destChars = this.settings.map ? DEST_CHARS_MAP : DEST_CHARS
-    const rows = placeholder ? [] : boardRows(this.board, station.name ?? '', now, BOARD_ROWS, destChars)
+    const rows = placeholder ? [] : boardRows(this.board, station.name ?? '', now, this.departureRows(), destChars, this.platformInfo(now)?.labelOf)
     const note = placeholder ?? (rows.length === 0 ? 'No upcoming departures.' : '')
     const extra = [note, this.boardError].filter(Boolean)
     const column = (k: keyof BoardRow) =>
@@ -619,7 +645,7 @@ export class GlassesApp {
       if (withMap) await this.upgrade(MAPINFO_ID, 'mapinfo', c.mapInfo)
     }
     if (withMap) void this.sendMap(rebuilt)
-    const net = this.network === swiss ? '' : ` (${this.network.name})`
+    const net = this.network === opendata ? '' : ` (${this.network.name})`
     this.status(`Departures · ${this.stations[this.stationIdx]?.name ?? 'locating'}${net}`)
   }
 
@@ -643,6 +669,17 @@ export class GlassesApp {
       this.mapTimer = setTimeout(() => void this.sendMap(force), settle)
       return
     }
+    // Swiss stops: platforms come from a Transitous lookup (cached). Wait briefly for it, so the
+    // first map already shows them instead of costing a second image transfer.
+    if (this.network === opendata && station.id && !cachedTable(station.id, clock())) {
+      const load = loadSwissTable(station, this.stations, clock())
+      void load.then((table) => {
+        if (table && this.stations[this.stationIdx] === station && this.mode === 'board') void this.renderBoard()
+      })
+      await Promise.race([load, new Promise((r) => setTimeout(r, PLATFORM_WAIT_MS))])
+      // Found: the renderBoard() above sends the map. Swiped meanwhile: the next stop's map follows.
+      if (cachedTable(station.id, clock()) || this.stations[this.stationIdx] !== station) return
+    }
     this.mapBusy = true
     this.mapPending = false
     const fix = this.fix
@@ -654,6 +691,7 @@ export class GlassesApp {
           .map((s) => s.coordinate)
           .map((c) => (c?.x != null && c.y != null ? { lat: c.x, lng: c.y } : { lat: NaN, lng: NaN })),
         selected: this.stationIdx,
+        platforms: this.platformInfo(clock())?.markers,
         label: this.stations.length > 1 ? `${this.stationIdx + 1}/${this.stations.length}` : '',
       })
       if (this.mode !== 'board' || !this.boardWithMap) return
@@ -673,8 +711,28 @@ export class GlassesApp {
     else if (this.mapPending) void this.sendMap()
   }
 
+  /** Rows for departures: a full board leaves the last one to an error ("Offline · retrying"),
+   *  so old departures don't pass as live. */
+  private departureRows() {
+    return BOARD_ROWS - (this.boardError ? 1 : 0)
+  }
+
+  /** Platforms the shown departures leave from, when they are in different places. Uses
+   *  cached data only; sendMap() loads what is missing. */
+  private platformInfo(now: number): PlatformInfo | null {
+    const station = this.stations[this.stationIdx]
+    if (!this.settings.map || !station?.id) return null
+    const shown = shownDepartures(this.board, now, this.departureRows())
+    if (this.network !== opendata) return assignPlatforms(shown, transitousPosition)
+    const table = cachedTable(station.id, now)
+    return table ? assignPlatforms(shown, (e) => swissPosition(table, e)) : null
+  }
+
+  /** Changes with everything the map image shows apart from your position. */
   private mapKeyNow() {
-    return `${this.stations.map((s) => s.id).join(',')}#${this.stationIdx}`
+    const id = this.stations[this.stationIdx]?.id
+    const platforms = this.platformInfo(clock())?.markers.map((m) => `${m.label}@${m.lat},${m.lng}`).join(';') ?? ''
+    return `${this.stations.map((s) => s.id).join(',')}#${this.stationIdx}#${id}#${platforms}`
   }
 
   private async switchStation(delta: number) {
@@ -726,12 +784,7 @@ export class GlassesApp {
       time: hhmm(now),
       toName: target.label,
     }
-    try {
-      const conns = await getNetwork(target.network).connections(query, 5)
-      this.options = conns.map((c) => ({ trip: buildTrip(c), query })).filter((o) => o.trip.legs.length > 0)
-    } catch {
-      this.options = []
-    }
+    this.options = await this.findConnections(target, query, this.fix)
     if (this.options.length === 0) {
       await this.showMessage(`→ ${target.label}`, 'No connection found (or offline).\nTap to go back.')
       return
@@ -748,12 +801,36 @@ export class GlassesApp {
     this.status(`Choosing a connection to ${target.label}`)
   }
 
-  private async startTransit(option: { trip: Trip; query: api.ConnectionQuery }) {
+  /** Connections from the target's own network; when it fails, from another network covering
+   *  your position (the destination stop is looked up there by name, stop ids differ). */
+  private async findConnections(target: Target, query: api.ConnectionQuery, fix: Fix): Promise<ConnectionOption[]> {
+    const own = getNetwork(target.network)
+    const now = clock()
+    const others = NETWORKS.filter((n) => n !== own && n.covers(fix.lat, fix.lng))
+    const order = [own, ...others].sort((a, b) => Number(isDown(a, now)) - Number(isDown(b, now)))
+    for (const network of order) {
+      try {
+        let q = query
+        if (network !== own && !COORDS.test(target.query)) {
+          const stop = (await network.searchLocations(target.place)).find((l) => l.id)
+          if (!stop?.id) continue
+          q = { ...query, to: stop.id }
+        }
+        const conns = await network.connections(q, 5)
+        return conns.map((c) => ({ trip: buildTrip(c), query: q, network })).filter((o) => o.trip.legs.length > 0)
+      } catch {
+        markDown(network, clock())
+      }
+    }
+    return []
+  }
+
+  private async startTransit(option: ConnectionOption) {
     if (!this.pendingTarget) return
     // Same origin and the trip's own departure time, so refreshes return this connection again
     const dep = option.trip.legs[0].from.scheduled
     const query: api.ConnectionQuery = { ...option.query, date: localDate(dep), time: hhmm(dep) }
-    this.active = { target: this.pendingTarget, query, trip: option.trip, checkedInAt: clock(), fetchedAt: clock() }
+    this.active = { target: this.pendingTarget, query, network: option.network.id, trip: option.trip, checkedInAt: clock(), fetchedAt: clock() }
     void saveCheckIn(this.active) // in the background: the journey screen must not wait for it
     fastForward()
     await this.showTransit()
@@ -793,7 +870,7 @@ export class GlassesApp {
     const a = this.active
     if (!a) return
     try {
-      const conns = await getNetwork(a.target.network).connections(a.query, 6)
+      const conns = await getNetwork(a.network ?? a.target.network).connections(a.query, 6)
       const match = conns.map(buildTrip).find((t) => t.signature === a.trip.signature)
       if (match) a.trip = match
       a.fetchedAt = clock()
@@ -892,7 +969,9 @@ export class GlassesApp {
     const now = clock()
     await this.updateClock()
     if (this.mode === 'board') {
-      if (now - this.boardFetchedAt > BOARD_REFRESH_MS) await this.loadBoard()
+      const preferred = this.fix && networkFor(this.settings.network, this.fix.lat, this.fix.lng)
+      if (this.failover && preferred && !isDown(preferred, now)) await this.loadNearby() // back to the chosen network
+      else if (now - this.boardFetchedAt > BOARD_REFRESH_MS) await this.loadBoard()
       else await this.renderBoard()
     } else if (this.mode === 'transit' && this.active) {
       if (checkInExpired(this.active, now, this.fix)) return this.endTransit()

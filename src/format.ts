@@ -75,9 +75,14 @@ export interface BoardRow {
   info: string
 }
 
-/** One row per departure; rendered as aligned columns (time · departs in · line · → destination · platform/delay).
- *  `when` stays short ("85'", "2h") so it fits the narrow column of the map layout too. */
-export function boardRows(entries: StationboardEntry[], stationName: string, now: number, max: number, destChars = 23): BoardRow[] {
+interface Upcoming {
+  e: StationboardEntry
+  sched: number
+  eff: number
+  delayMin: number
+}
+
+function upcoming(entries: StationboardEntry[], now: number, max: number): Upcoming[] {
   const parse = (iso: string | null | undefined) => parseTime(iso) ?? NaN
   return entries
     .map((e) => {
@@ -91,17 +96,37 @@ export function boardRows(entries: StationboardEntry[], stationName: string, now
     .filter((r) => !Number.isNaN(r.eff) && r.eff >= now - 30_000 && r.eff <= now + BOARD_HORIZON_MS)
     .sort((a, b) => a.eff - b.eff)
     .slice(0, max)
-    .map(({ e, sched, eff, delayMin }) => {
-      const mins = minutesUntil(eff, now)
-      const plat = e.stop.prognosis?.platform ?? e.stop.platform
-      return {
-        time: hhmm(Number.isNaN(sched) ? eff : sched),
-        when: mins <= 0 ? 'now' : mins < 100 ? `${mins}'` : `${Math.round(mins / 60)}h`,
-        line: truncate(lineName(e.category, e.number), 8),
-        dest: `→ ${truncate(shortStop(e.to, stationName), destChars)}`,
-        info: [plat, delayMin > 0 ? `+${delayMin}'` : ''].filter(Boolean).join(' '),
-      }
-    })
+}
+
+/** The departures boardRows() shows, in the same order. */
+export function shownDepartures(entries: StationboardEntry[], now: number, max: number): StationboardEntry[] {
+  return upcoming(entries, now, max).map((u) => u.e)
+}
+
+/**
+ * One row per departure; rendered as aligned columns (time · departs in · line · → destination · platform/delay).
+ * `when` stays short ("85'", "2h") so it fits the narrow column of the map layout too.
+ * labelOf: platform label of the map markers (A, B, … or the platform name), so rows and map agree.
+ */
+export function boardRows(
+  entries: StationboardEntry[],
+  stationName: string,
+  now: number,
+  max: number,
+  destChars = 23,
+  labelOf?: Map<StationboardEntry, string>,
+): BoardRow[] {
+  return upcoming(entries, now, max).map(({ e, sched, eff, delayMin }) => {
+    const mins = minutesUntil(eff, now)
+    const plat = labelOf?.get(e) ?? e.stop.prognosis?.platform ?? e.stop.platform
+    return {
+      time: hhmm(Number.isNaN(sched) ? eff : sched),
+      when: mins <= 0 ? 'now' : mins < 100 ? `${mins}'` : `${Math.round(mins / 60)}h`,
+      line: truncate(lineName(e.category, e.number), 8),
+      dest: `→ ${truncate(shortStop(e.to, stationName), destChars)}`,
+      info: [plat, delayMin > 0 ? `+${delayMin}'` : ''].filter(Boolean).join(' '),
+    }
+  })
 }
 
 // ---------- Connection picker ----------
@@ -179,7 +204,9 @@ export function tripSteps(trip: Trip, p: Progress): { lines: string[]; currentLi
     if (prev?.kind === 'ride') {
       const wait = duration(leg.from.time - prev.to.time)
       const how = walk ? `${wait}, walk ${duration(walk.to.time - walk.from.time)}` : wait
-      const at = walk && shortStop(prev.to.name, context) !== shortStop(leg.from.name, context) ? `${stop(prev.to.name, 18)} → ${stop(leg.from.name, 18)}` : stop(leg.from.name, 28)
+      // Same stop from two data feeds ("Bern" / "BERN") is no change of stop
+      const sameStop = shortStop(prev.to.name, context).toLowerCase() === shortStop(leg.from.name, context).toLowerCase()
+      const at = walk && !sameStop ? `${stop(prev.to.name, 18)} → ${stop(leg.from.name, 18)}` : stop(leg.from.name, 28)
       // A change counts as current while walking to the next platform
       lines.push(`${mark(walk && p.legIndex === i - 1 ? i - 1 : i)} Change at ${at} (${how})`)
       lines.push(`   arr ${time(prev.to)}${platform(prev.to)} → dep ${time(leg.from)}${platform(leg.from)}`)

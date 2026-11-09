@@ -93,7 +93,7 @@ export const CREDITS: CreditGroup[] = [
       {
         name: 'Transport API (transport.opendata.ch)',
         url: 'https://transport.opendata.ch',
-        usedFor: 'Switzerland: stops near you, departures, connections and search.',
+        usedFor: 'Switzerland and trains across the border: stops near you, departures, connections and search.',
         licence: 'MIT License (software), © 2012–2026 Opendata.ch',
         licenceUrl: 'https://transport.opendata.ch/licenses.html',
         notice: 'Unofficial API, powered by Opendata.ch.',

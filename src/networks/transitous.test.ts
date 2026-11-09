@@ -3,7 +3,7 @@ import { buildTrip } from '../journey'
 import { boardRows, connectionItem, fitBytes, shortStop, tripSteps } from '../format'
 import { estimateProgress } from '../journey'
 import { cleanTrack, connectionsFromPlan, lineParts, locationsFromGeocode, nearbyFromMapStops, stationboardFromStopTimes } from './transitous'
-import { NETWORKS, networkFor, swiss } from '.'
+import { NETWORKS, networkFor, opendata } from '.'
 import plan from '../__fixtures__/transitous-plan.json'
 import longPlan from '../__fixtures__/transitous-plan-long.json'
 import stopTimes from '../__fixtures__/transitous-stoptimes.json'
@@ -94,8 +94,8 @@ describe('long journeys (Wallisellen → Hamburg)', () => {
 })
 
 describe('networks', () => {
-  it('selects Switzerland inside the country and Transitous elsewhere', () => {
-    expect(networkFor('auto', 47.3782, 8.5402)).toBe(swiss)
+  it('selects transport.opendata.ch inside Switzerland and Transitous elsewhere', () => {
+    expect(networkFor('auto', 47.3782, 8.5402)).toBe(opendata)
     expect(networkFor('auto', 52.52, 13.4).id).toBe('eu')
     expect(networkFor('eu', 47.3782, 8.5402).id).toBe('eu')
     expect(NETWORKS.map((n) => n.id)).toEqual(['ch', 'eu'])

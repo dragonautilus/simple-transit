@@ -32,7 +32,7 @@ Captured from the Even Hub simulator with live timetable data (576 × 288 px, th
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="store/screenshots/01-departures-zurich.png" alt="Departures around you"><br><b>Departures around you</b><br>The closest stop with minutes, line, destination, platform and delay. The map shows where the stop is, with distance, direction and walking time.</td>
+<td width="50%" valign="top"><img src="store/screenshots/01-departures-zurich.png" alt="Departures around you"><br><b>Departures around you</b><br>The closest stop with minutes, line, destination, platform and delay. The map shows where the stop is, with distance, direction and walking time; A and B mark which side of the street each departure leaves from.</td>
 <td width="50%" valign="top"><img src="store/screenshots/02-departures-berlin.png" alt="Also in Germany"><br><b>Also in Germany</b><br>Berlin S-Bahn, U-Bahn, tram and bus via Transitous. The network is picked by location.</td>
 </tr>
 <tr>
@@ -56,16 +56,19 @@ Captured from the Even Hub simulator with live timetable data (576 × 288 px, th
   between nearby stops.
 - **Clock** in the top right corner of every screen.
 - **Street map** next to the board: you, the selected stop, the other stops nearby, distance,
-  direction and walking time.
+  direction and walking time. When the departures leave from different places (both sides of a
+  street), each platform is marked with a letter or its platform number, the same as in the board
+  rows.
 - **Navigation** to preset targets (home, work, any stop or address) set up on the phone: pick a
   connection, then follow it on a journey line. A dot moves along it by the timetable (including
   delays) and is corrected by GPS when the train is clearly early or late. Every change shows
   arrival and departure time and platform.
 - **Check-in:** the journey you pick is saved. Close the app on a long ride and it opens straight
   into the journey again; it checks out by itself after arrival.
-- **Networks:** Switzerland via [transport.opendata.ch](https://transport.opendata.ch), Germany
-  and the rest of Europe via [Transitous](https://transitous.org). Picked automatically by
-  location, or set by hand.
+- **Networks:** Switzerland & cross-border via [transport.opendata.ch](https://transport.opendata.ch)
+  (the Swiss timetable incl. trains to and from abroad), Germany and the rest of Europe via
+  [Transitous](https://transitous.org). Picked automatically by location, or set by hand. If one
+  fails, the other takes over until it works again.
 
 ### On the glasses
 
@@ -105,6 +108,7 @@ The simulator has no GPS and no Bluetooth delays, so the dev build reads a few U
 | `jitter=20` | position wanders by up to 20 m every 2 s |
 | `slowimg=3000` | every map image transfer takes 3 s longer |
 | `perf=1` | timings and bridge traffic in the console |
+| `fail=transport.opendata.ch` | requests to that host fail (try the network failover) |
 
 ### Beta release
 

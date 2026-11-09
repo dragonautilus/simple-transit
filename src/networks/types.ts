@@ -7,7 +7,7 @@ import type { Connection, ConnectionQuery, Location, StationboardEntry } from '.
 export interface Network {
   /** Stable id, stored with targets and settings. */
   id: string
-  /** Shown in the phone app, e.g. "Switzerland". */
+  /** Shown in the phone app, e.g. "Switzerland & cross-border". */
   name: string
   /** Data provider, e.g. "transport.opendata.ch". */
   source: string

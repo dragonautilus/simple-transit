@@ -9,11 +9,13 @@
 //   jitter     makes the mock position wander by up to n m every 2 s (GPS after a cold start)
 //   slowimg    delays every map image transfer by n ms (the simulator is faster than Bluetooth)
 //   perf       logs timings and bridge traffic to the console
+//   fail       requests to these hosts fail, e.g. fail=transport.opendata.ch (network failover)
 
 import type { Target } from './bridge'
 import type { Fix } from './journey'
 
-const params = new URLSearchParams(import.meta.env.DEV ? location.search : '')
+// No location in unit tests (Node)
+const params = new URLSearchParams(import.meta.env.DEV && typeof location !== 'undefined' ? location.search : '')
 const num = (k: string) => (params.has(k) ? Number(params.get(k)) : NaN)
 
 const lat = num('lat')
@@ -33,6 +35,9 @@ export function fastForward(): void {
 }
 
 export const slowImageMs = num('slowimg') || 0
+
+/** Hosts whose requests fail, to try the network failover. */
+export const failHosts = new Set((params.get('fail') ?? '').split(',').filter(Boolean))
 
 const perf = params.has('perf')
 export function mark(label: string): void {

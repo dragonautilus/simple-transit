@@ -19,6 +19,9 @@ export interface MapInput {
   me: (MapPoint & { accuracy?: number }) | null
   stations: MapPoint[]
   selected: number
+  /** Platforms of the selected stop that the shown departures leave from, labelled like the
+   *  board rows; only when they are in different places (both sides of a street). */
+  platforms?: (MapPoint & { label: string })[]
   /** e.g. "2/6": which stop of the board the map shows, same as in the board header. */
   label?: string
 }
@@ -59,7 +62,7 @@ const MAX_SPAN_M = 3000
 /** View that keeps you and the selected stop in frame, centred between both. */
 export function computeView(input: MapInput): View | null {
   const station = input.stations[input.selected]
-  const focus = [input.me, station].filter((p): p is MapPoint => !!p)
+  const focus = [input.me, ...(input.platforms?.length ? input.platforms : [station])].filter((p): p is MapPoint => !!p)
   if (focus.length === 0) return null
   const pts = focus.map(project)
   const xs = pts.map((p) => p[0])
@@ -211,6 +214,69 @@ function drawSelectedStop(ctx: Ctx, stop: MapPoint, at: ToCanvas) {
   ctx.strokeRect(x - 8.5, y - 8.5, 17, 17)
 }
 
+const BOX_H = 15
+const BOX_GAP = 3
+
+/** Moves overlapping boxes apart along the line between them, so every label stays readable
+ *  (a few pixels off is fine; the platforms of a narrow street are only metres apart). */
+export function spreadApart(boxes: { x: number; y: number; w: number }[]): void {
+  for (let round = 0; round < 20; round++) {
+    let moved = false
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i]
+        const b = boxes[j]
+        const overlapX = (a.w + b.w) / 2 + BOX_GAP - Math.abs(b.x - a.x)
+        const overlapY = BOX_H + BOX_GAP - Math.abs(b.y - a.y)
+        if (overlapX <= 0 || overlapY <= 0) continue
+        // Separate along the axis that needs less movement; same spot: side by side
+        const alongX = overlapX <= overlapY
+        const sign = alongX ? Math.sign(b.x - a.x) || 1 : Math.sign(b.y - a.y) || 1
+        const d = ((alongX ? overlapX : overlapY) / 2) * sign
+        if (alongX) {
+          a.x -= d
+          b.x += d
+        } else {
+          a.y -= d
+          b.y += d
+        }
+        moved = true
+      }
+    }
+    if (!moved) return
+  }
+}
+
+/** One labelled box per platform, with the label the board rows show for its departures. */
+function drawPlatforms(ctx: Ctx, platforms: NonNullable<MapInput['platforms']>, at: ToCanvas) {
+  ctx.font = 'bold 11px sans-serif'
+  const boxes = platforms.map((p) => {
+    const [x, y] = at(p)
+    const w = Math.max(15, ctx.measureText(p.label).width + 6)
+    return { x, y, w, label: p.label }
+  })
+  spreadApart(boxes)
+  // All backings first, so boxes that overlap keep their outlines
+  ctx.fillStyle = '#000'
+  for (const b of boxes) ctx.fillRect(b.x - b.w / 2 - 1.5, b.y - BOX_H / 2 - 1.5, b.w + 3, BOX_H + 3)
+  ctx.lineWidth = 2
+  ctx.strokeStyle = WHITE
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (const b of boxes) {
+    ctx.strokeRect(b.x - b.w / 2, b.y - BOX_H / 2, b.w, BOX_H)
+    ctx.fillStyle = WHITE
+    ctx.fillText(b.label, b.x, b.y + 0.5)
+  }
+  ctx.textBaseline = 'alphabetic'
+}
+
+/** The platform you reach first, for the walking line. */
+function nearest(me: MapPoint, points: MapPoint[]): MapPoint {
+  const d = (p: MapPoint) => (p.lat - me.lat) ** 2 + ((p.lng - me.lng) * Math.cos((me.lat * Math.PI) / 180)) ** 2
+  return points.reduce((a, b) => (d(b) < d(a) ? b : a))
+}
+
 function drawMe(ctx: Ctx, me: NonNullable<MapInput['me']>, view: View, at: ToCanvas) {
   const [x, y] = at(me)
   const accuracyPx = (me.accuracy ?? 0) / view.mpp
@@ -273,8 +339,10 @@ export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promi
   drawStreets(ctx, view, await Promise.all(view.tiles.map(([x, y]) => loadTile(view.z, x, y))))
   drawOtherStops(ctx, input, at)
   const stop = input.stations[input.selected]
-  if (stop && input.me) drawWayToStop(ctx, input.me, stop, at)
-  if (stop) drawSelectedStop(ctx, stop, at)
+  const platforms = stop && input.platforms?.length ? input.platforms : null
+  if (stop && input.me) drawWayToStop(ctx, input.me, platforms ? nearest(input.me, platforms) : stop, at)
+  if (platforms) drawPlatforms(ctx, platforms, at)
+  else if (stop) drawSelectedStop(ctx, stop, at)
   if (input.me) drawMe(ctx, input.me, view, at)
 
   label(ctx, 'N↑', 4, 12, 'left', 'bold 11px sans-serif', LABEL)

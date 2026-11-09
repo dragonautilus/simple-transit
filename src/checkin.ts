@@ -9,6 +9,9 @@ import { distanceM, type Fix, type Trip } from './journey'
 export interface CheckIn {
   target: Target
   query: ConnectionQuery
+  /** Network the query (stop ids) belongs to; another than the target's when that had failed.
+   *  Missing in check-ins from before 0.5.1: the target's network. */
+  network?: string
   trip: Trip
   checkedInAt: number
   /** When the timetable (incl. delays) was last refreshed. */
