@@ -94,11 +94,11 @@ describe('long journeys (Wallisellen → Hamburg)', () => {
 })
 
 describe('networks', () => {
-  it('selects transport.opendata.ch inside Switzerland and Transitous elsewhere', () => {
-    expect(networkFor('auto', 47.3782, 8.5402)).toBe(opendata)
+  it('prefers Transitous everywhere; transport.opendata.ch only when set by hand', () => {
+    expect(networkFor('auto', 47.3782, 8.5402).id).toBe('eu')
     expect(networkFor('auto', 52.52, 13.4).id).toBe('eu')
-    expect(networkFor('eu', 47.3782, 8.5402).id).toBe('eu')
-    expect(NETWORKS.map((n) => n.id)).toEqual(['ch', 'eu'])
+    expect(networkFor('ch', 47.3782, 8.5402)).toBe(opendata)
+    expect(NETWORKS.map((n) => n.id)).toEqual(['eu', 'ch'])
   })
 
   it('drops a same-town suffix from stop names', () => {

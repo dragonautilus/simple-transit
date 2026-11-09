@@ -1,6 +1,6 @@
 # Architecture
 
-Simple euro transit is a plain TypeScript web app (no framework) that runs in the Even Realities
+Simple public transit is a plain TypeScript web app (no framework) that runs in the Even Realities
 app's WebView on the phone. The same page is the phone settings screen and the controller of the
 glasses: it talks to the glasses through the Even Hub SDK bridge, which forwards every call over
 Bluetooth.

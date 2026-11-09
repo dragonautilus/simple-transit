@@ -20,7 +20,7 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import type * as api from './api'
 import { DEFAULT_SETTINGS, bridgeStats, cachedSettings, loadSettings, loadTargets, serial, type Settings, type Target } from './bridge'
-import { NETWORKS, candidates, getNetwork, isDown, markDown, networkFor, opendata, type Network } from './networks'
+import { DEFAULT_NETWORK, NETWORKS, candidates, getNetwork, isDown, markDown, networkFor, opendata, type Network } from './networks'
 import { MAP_H, MAP_W, compass, renderMapPng } from './map/board-map'
 import { assignPlatforms, cachedTable, loadSwissTable, swissPosition, transitousPosition, type PlatformInfo } from './map/platforms'
 import { cachedCheckIn, checkInExpired, loadCheckIn, saveCheckIn, type CheckIn } from './checkin'
@@ -145,7 +145,7 @@ export class GlassesApp {
   private board: api.StationboardEntry[] = []
   private settings: Settings = DEFAULT_SETTINGS
   /** Network of the departure board (targets carry their own). */
-  private network: Network = opendata
+  private network: Network = getNetwork(DEFAULT_NETWORK)
   /** The board uses another network because the chosen one failed; switch back once it may work again. */
   private failover = false
   /** Board layout currently on screen: with or without map. */
@@ -210,7 +210,7 @@ export class GlassesApp {
       first = this.withClock({ textObject: texts, ...(this.settings.map ? { imageObject: [this.mapImage()] } : {}) })
       this.mode = 'board'
       this.boardWithMap = this.settings.map
-    } else first = this.withClock({ textObject: this.messageTexts('Simple euro transit', 'Locating closest stops…', ' ') })
+    } else first = this.withClock({ textObject: this.messageTexts('Simple public transit', 'Locating closest stops…', ' ') })
     await serial(() => this.bridge.createStartUpPageContainer(new CreateStartUpPageContainer(first)))
     this.page++
     this.remember(first.textObject)
@@ -653,7 +653,7 @@ export class GlassesApp {
       if (withMap) await this.upgrade(MAPINFO_ID, 'mapinfo', c.mapInfo)
     }
     if (withMap) void this.sendMap(rebuilt)
-    const net = this.network === opendata ? '' : ` (${this.network.name})`
+    const net = this.network.id === DEFAULT_NETWORK ? '' : ` (${this.network.name})`
     this.status(`Departures · ${this.stations[this.stationIdx]?.name ?? 'locating'}${net}`)
   }
 

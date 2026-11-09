@@ -1,4 +1,4 @@
-// Germany (and most of Europe) via Transitous, a community-run MOTIS instance:
+// Preferred network, worldwide via Transitous, a community-run MOTIS instance:
 // https://transitous.org/api/  Data sources: https://transitous.org/sources/
 // Responses are converted into the transport.opendata.ch shapes from api.ts.
 //
@@ -252,9 +252,9 @@ function isoTime(q: ConnectionQuery): string | undefined {
 
 export const transitous: Network = {
   id: 'eu',
-  name: 'Germany & Europe',
+  name: 'International',
   source: 'Transitous',
-  // Everything outside Switzerland; used as the fallback network
+  // Everywhere: preferred network, and the last resort where no other network covers a position
   covers: () => true,
 
   async nearbyStations(lat, lng, max = 6) {

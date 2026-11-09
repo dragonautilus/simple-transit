@@ -1,7 +1,7 @@
 {
-  "name": "simple-euro-transit",
+  "name": "simple-public-transit",
   "private": true,
-  "version": "0.6.1",
+  "version": "0.7.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "test": "vitest run",
     "sim": "node node_modules/@evenrealities/evenhub-simulator/bin/index.js \"http://localhost:5173/?lat=47.3782&lng=8.5402\"",
     "qr": "evenhub qr --url",
-    "pack": "npm run build && evenhub pack app.json dist -o simple-euro-transit.ehpk --sdk-ver 0.0.16",
+    "pack": "npm run build && evenhub pack app.json dist -o simple-public-transit.ehpk --sdk-ver 0.0.16",
     "icon": "node scripts/make-icon.mjs icon.png"
   },
   "dependencies": {

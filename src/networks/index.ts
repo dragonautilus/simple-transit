@@ -18,8 +18,9 @@ export const opendata: Network = {
   id: 'ch',
   name: 'Switzerland & cross-border',
   source: 'transport.opendata.ch',
-  // Automatic selection: Switzerland + Liechtenstein bounding box (also catches some border towns,
-  // which the Swiss timetable mostly covers too); local transport abroad comes from Transitous
+  // Switzerland + Liechtenstein bounding box (also catches some border towns, which the Swiss
+  // timetable mostly covers too). Transitous is preferred everywhere; this network takes over in
+  // Switzerland when Transitous fails or finds no stop close by.
   covers: (lat, lng) => lat >= 45.81 && lat <= 47.81 && lng >= 5.95 && lng <= 10.5,
   nearbyStations: opendataApi.nearbyStations,
   searchLocations: opendataApi.searchLocations,
@@ -27,13 +28,14 @@ export const opendata: Network = {
   connections: opendataApi.connections,
 }
 
-/** Order matters for automatic selection: the first network that covers a position wins. */
-export const NETWORKS: Network[] = [opendata, transitous]
+/** Order matters for automatic selection: the first network that covers a position wins.
+ *  Transitous (worldwide) is preferred; the others are fallbacks where they cover the position. */
+export const NETWORKS: Network[] = [transitous, opendata]
 
-export const DEFAULT_NETWORK = opendata.id
+export const DEFAULT_NETWORK = transitous.id
 
 export function getNetwork(id: string | undefined | null): Network {
-  return NETWORKS.find((n) => n.id === id) ?? opendata
+  return NETWORKS.find((n) => n.id === id) ?? transitous
 }
 
 /** 'auto' picks by position; any other value forces that network. */

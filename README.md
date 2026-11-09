@@ -1,9 +1,9 @@
-<h1 align="center">Simple euro transit</h1>
+<h1 align="center">Simple public transit</h1>
 
 <p align="center">
   <b>Public transport on your Even Realities G2 glasses.</b><br>
   Departures around you, a small street map and step-by-step journeys with a live progress line.<br>
-  Switzerland and Germany (plus much of Europe), open data only.
+  Anywhere Transitous has timetable data, open data only.
 </p>
 
 <p align="center">
@@ -33,7 +33,7 @@ Captured from the Even Hub simulator with live timetable data (576 × 288 px, th
 <table>
 <tr>
 <td width="50%" valign="top"><img src="store/screenshots/01-departures-zurich.png" alt="Departures around you"><br><b>Departures around you</b><br>The closest stop with minutes, line, destination, platform and delay. The map shows where the stop is, with distance, direction and walking time; A and B mark which side of the street each departure leaves from.</td>
-<td width="50%" valign="top"><img src="store/screenshots/02-departures-berlin.png" alt="Also in Germany"><br><b>Also in Germany</b><br>Berlin S-Bahn, U-Bahn, tram and bus via Transitous. The network is picked by location.</td>
+<td width="50%" valign="top"><img src="store/screenshots/02-departures-berlin.png" alt="Not just one country"><br><b>Not just one country</b><br>Berlin S-Bahn, U-Bahn, tram and bus via Transitous, the same as anywhere else it has data.</td>
 </tr>
 <tr>
 <td width="50%" valign="top"><img src="store/screenshots/03-targets.png" alt="Your targets"><br><b>Your targets</b><br>Home, work or any stop or address, set up in the phone app.</td>
@@ -65,10 +65,10 @@ Captured from the Even Hub simulator with live timetable data (576 × 288 px, th
   arrival and departure time and platform.
 - **Check-in:** the journey you pick is saved. Close the app on a long ride and it opens straight
   into the journey again; it checks out by itself after arrival.
-- **Networks:** Switzerland & cross-border via [transport.opendata.ch](https://transport.opendata.ch)
-  (the Swiss timetable incl. trains to and from abroad), Germany and the rest of Europe via
-  [Transitous](https://transitous.org). Picked automatically by location, or set by hand. If one
-  fails, the other takes over until it works again.
+- **Networks:** [Transitous](https://transitous.org) is preferred everywhere it has data. In
+  Switzerland, [transport.opendata.ch](https://transport.opendata.ch) (the Swiss timetable incl.
+  trains to and from abroad) takes over when Transitous fails or finds no stop close by, until
+  Transitous works again. Either network can also be set by hand.
 
 ### On the glasses
 
@@ -88,7 +88,7 @@ npm run dev          # Vite dev server on port 5173
 npm run sim          # Even Hub simulator, opens the dev server with a fixed Zürich position
 npm test             # unit tests (vitest)
 npm run build        # type check + production build into dist/
-npm run pack         # build + simple-euro-transit.ehpk
+npm run pack         # build + simple-public-transit.ehpk
 ```
 
 On real glasses during development: `npm run dev`, then `npx evenhub qr --url http://<your-lan-ip>:5173`

@@ -51,7 +51,7 @@ export const CREDITS: CreditGroup[] = [
     title: 'This app',
     items: [
       {
-        name: 'Simple euro transit',
+        name: 'Simple public transit',
         url: 'https://opensource.org/license/mit',
         usedFor: 'Source code of this app. Data and third-party software below keep their own licences.',
         licence: 'MIT License',
@@ -68,7 +68,7 @@ export const CREDITS: CreditGroup[] = [
         usedFor: 'Swiss timetable and real-time data (stops, departures, connections, delays, platforms), received through transport.opendata.ch.',
         licence: 'opentransportdata.swiss terms of use',
         licenceUrl: 'https://opentransportdata.swiss/en/terms-of-use/',
-        notice: 'Source: opentransportdata.swiss. The data is processed (filtered, shortened and combined for display) by Simple euro transit.',
+        notice: 'Source: opentransportdata.swiss. The data is processed (filtered, shortened and combined for display) by Simple public transit.',
       },
       {
         name: 'DELFI e.V. (opendata-oepnv.de)',
@@ -76,12 +76,12 @@ export const CREDITS: CreditGroup[] = [
         usedFor: 'Nationwide German timetable data, received through Transitous.',
         licence: 'CC BY 4.0',
         licenceUrl: 'https://creativecommons.org/licenses/by/4.0/',
-        notice: 'Contains data of DELFI e.V., licensed under CC BY 4.0. Changes: converted and combined with other sources by Transitous, filtered and shortened for display by Simple euro transit.',
+        notice: 'Contains data of DELFI e.V., licensed under CC BY 4.0. Changes: converted and combined with other sources by Transitous, filtered and shortened for display by Simple public transit.',
       },
       {
         name: 'Further sources via Transitous',
         url: 'https://transitous.org/sources/',
-        usedFor: 'Regional and real-time feeds in Germany and the rest of Europe (each with its own licence, listed on the Transitous sources page).',
+        usedFor: 'Regional, national and real-time feeds in many countries (each with its own licence, listed on the Transitous sources page).',
         licence: 'Various (listed per source)',
         licenceUrl: 'https://transitous.org/sources/',
       },
@@ -93,7 +93,7 @@ export const CREDITS: CreditGroup[] = [
       {
         name: 'Transport API (transport.opendata.ch)',
         url: 'https://transport.opendata.ch',
-        usedFor: 'Switzerland and trains across the border: stops near you, departures, connections and search.',
+        usedFor: 'Fallback in Switzerland and for trains across the border: stops near you, departures, connections and search.',
         licence: 'MIT License (software), © 2012–2026 Opendata.ch',
         licenceUrl: 'https://transport.opendata.ch/licenses.html',
         notice: 'Unofficial API, powered by Opendata.ch.',
@@ -101,7 +101,7 @@ export const CREDITS: CreditGroup[] = [
       {
         name: 'Transitous',
         url: 'https://transitous.org',
-        usedFor: 'Germany & Europe: stops near you, departures, connections and search; street map tiles for the departure board map (all countries).',
+        usedFor: 'Preferred network: stops near you, departures, connections and search; street map tiles for the departure board map (all countries).',
         licence: 'Transitous usage policy',
         licenceUrl: 'https://transitous.org/api/',
         notice: 'Community-run, free service for non-commercial use. Data sources: transitous.org/sources.',

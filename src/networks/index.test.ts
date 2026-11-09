@@ -8,16 +8,16 @@ const BERLIN = [52.52, 13.41] as const
 describe('network failover', () => {
   afterEach(resetHealth)
 
-  it('asks the network for the position first, then the others covering it', () => {
-    expect(candidates('auto', ...ZURICH, 0)).toEqual([opendata, transitous])
+  it('prefers Transitous, then the others covering the position', () => {
+    expect(candidates('auto', ...ZURICH, 0)).toEqual([transitous, opendata])
     expect(candidates('auto', ...BERLIN, 0)).toEqual([transitous])
-    expect(candidates('eu', ...ZURICH, 0)).toEqual([transitous, opendata])
+    expect(candidates('ch', ...ZURICH, 0)).toEqual([opendata, transitous])
   })
 
   it('puts a network that just failed last, and tries it first again after the pause', () => {
-    markDown(opendata, 1000)
-    expect(isDown(opendata, 1000)).toBe(true)
-    expect(candidates('auto', ...ZURICH, 1000)).toEqual([transitous, opendata])
-    expect(candidates('auto', ...ZURICH, 1000 + DOWN_MS + 1)).toEqual([opendata, transitous])
+    markDown(transitous, 1000)
+    expect(isDown(transitous, 1000)).toBe(true)
+    expect(candidates('auto', ...ZURICH, 1000)).toEqual([opendata, transitous])
+    expect(candidates('auto', ...ZURICH, 1000 + DOWN_MS + 1)).toEqual([transitous, opendata])
   })
 })

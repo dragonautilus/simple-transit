@@ -22,6 +22,6 @@ SOFTWARE.
 
 ---
 
-This licence covers the source code of Simple euro transit. Timetable data, map data and the
+This licence covers the source code of Simple public transit. Timetable data, map data and the
 third-party software the app uses keep their own licences and terms; they are listed in the app
 under "Data sources & licences" (src/credits.ts).

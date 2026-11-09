@@ -1,4 +1,4 @@
-# Simple euro transit: private beta
+# Simple public transit: private beta
 
 Tester account: `dominik.fahrni@gmail.com` (must be the account signed in to the Even Realities App on the test phone).
 
@@ -17,18 +17,18 @@ Tester account: `dominik.fahrni@gmail.com` (must be the account signed in to the
 scripts/beta-release.sh "what changed"
 ```
 
-It type-checks, runs the tests, builds `icon.png` and `simple-euro-transit.ehpk`, creates the app (first run) or uploads a new version, promotes it to **beta** and invites the tester.
-For every later build raise `"version"` in `app.json` first (currently `0.6.1`, next e.g. `0.6.2`); a version number can only be uploaded once.
+It type-checks, runs the tests, builds `icon.png` and `simple-public-transit.ehpk`, creates the app (first run) or uploads a new version, promotes it to **beta** and invites the tester.
+For every later build raise `"version"` in `app.json` first (currently `0.7.0`, next e.g. `0.7.1`); a version number can only be uploaded once.
 
 Then manually:
 
 1. Open the invitation email on `dominik.fahrni@gmail.com` and accept it.
 2. Check that both gates hold (otherwise the phone says "test version expired"):
    ```bash
-   npx evenhub ls com.dominikfahrni.simpleeurotransit   # CHANNEL: beta
+   npx evenhub ls com.dominikfahrni.simplepublictransit   # CHANNEL: beta
    npx evenhub testers                                   # status: Active
    ```
-3. Phone: **Even Realities App → Me → Beta tester → Simple euro transit → Install**.
+3. Phone: **Even Realities App → Me → Beta tester → Simple public transit → Install**.
 4. Allow location access when asked.
 
 ## 3. Test checklist
@@ -42,7 +42,7 @@ Data sources & licences (phone)
 - [ ] Glasses map shows "© OSM" in the top right corner (readable?).
 
 Settings (phone)
-- [ ] Network "Automatic" picks Switzerland & cross-border in CH and Germany & Europe elsewhere; forcing a network reloads the board.
+- [ ] Network "Automatic" picks International (Transitous) everywhere; in CH, Switzerland & cross-border takes over when Transitous fails (try `?fail=api.transitous.org`). Forcing a network reloads the board.
 - [ ] Map checkbox off → board uses the full width; on → map is back.
 
 Speed (0.3.1)
@@ -65,8 +65,8 @@ Departure board (start from the **glasses menu**)
 - [ ] Map follows when you walk (redraws every ~25 m, at most every 15 s) and when you swipe to another stop; "n m NE · n' walk" under it is right.
 - [ ] Streets are readable on the glasses (not too bright/dim). Map without streets = tile download failed (still shows stops and you).
 
-Germany (needs a German location or the network forced to "Germany & Europe")
-- [ ] Add a German target (network "Germany & Europe" in Add target), e.g. "Berlin Südkreuz".
+Germany (needs a German location, or the network set to "Automatic" or "International")
+- [ ] Add a German target (network "International" in Add target), e.g. "Berlin Südkreuz".
 - [ ] Board shows S/U-Bahn, tram and bus lines with destination, platform where available, delays.
 - [ ] Navigation works, a change with a walk between platforms shows "Change at … (n', walk n')".
 
@@ -94,7 +94,7 @@ Check-in (long journeys)
 Lifecycle (what the Even QA review checks)
 - [ ] Lock the phone for **5 minutes** on the board, unlock: app still there and updating.
 - [ ] Same during navigation: progress continues, GPS ring returns.
-- [ ] Force-quit the Even app during navigation and relaunch Simple euro transit: navigation resumes.
+- [ ] Force-quit the Even app during navigation and relaunch Simple public transit: navigation resumes.
 - [ ] Double tap on the board → system exit dialog; Cancel keeps the app, Confirm exits.
 - [ ] Flight mode on the board: "Offline · retrying", recovers when back online.
 

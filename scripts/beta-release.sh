@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds, uploads and promotes Simple euro transit to the Even Hub beta channel and invites the
+# Builds, uploads and promotes Simple public transit to the Even Hub beta channel and invites the
 # tester. Safe to re-run: existing app -> upload, existing tester -> skipped.
 #
 # Usage: scripts/beta-release.sh ["what changed"]
@@ -9,13 +9,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TESTER="dominik.fahrni@gmail.com"
-NAME="Simple euro transit"
+NAME="Simple public transit"
 TAGLINE="Live departures and transit on your glasses"
 CHANGES="${1:-Beta build}"
 
 PKG=$(node -p "require('./app.json').package_id")
 VERSION=$(node -p "require('./app.json').version")
-EHPK="simple-euro-transit.ehpk"
+EHPK="simple-public-transit.ehpk"
 evenhub() { npx --no-install evenhub "$@"; }
 
 echo "== $NAME $VERSION ($PKG)"

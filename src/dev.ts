@@ -9,7 +9,7 @@
 //   jitter     makes the mock position wander by up to n m every 2 s (GPS after a cold start)
 //   slowimg    delays every map image transfer by n ms (the simulator is faster than Bluetooth)
 //   perf       logs timings and bridge traffic to the console
-//   fail       requests to these hosts fail, e.g. fail=transport.opendata.ch (network failover)
+//   fail       requests to these hosts fail, e.g. fail=api.transitous.org (network failover)
 
 import type { Target } from './bridge'
 import type { Fix } from './journey'
