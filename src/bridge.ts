@@ -81,9 +81,11 @@ export interface Settings {
   network: string
   /** Small street map next to the departure board. */
   map: boolean
+  /** The map turns so that the direction you face is up (else north is up). */
+  rotate: boolean
 }
 
-export const DEFAULT_SETTINGS: Settings = { network: 'auto', map: true }
+export const DEFAULT_SETTINGS: Settings = { network: 'auto', map: true, rotate: true }
 
 const KEY = 'sst.targets'
 const SETTINGS_KEY = 'sst.settings'
@@ -164,6 +166,7 @@ function toSettings(parsed: unknown): Settings {
   return {
     network: str(p.network) ? p.network : DEFAULT_SETTINGS.network,
     map: typeof p.map === 'boolean' ? p.map : DEFAULT_SETTINGS.map,
+    rotate: typeof p.rotate === 'boolean' ? p.rotate : DEFAULT_SETTINGS.rotate,
   }
 }
 

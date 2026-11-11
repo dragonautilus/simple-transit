@@ -180,6 +180,9 @@ function projectOnLeg(leg: Leg, pos: LatLng): Projection | null {
 export interface Fix extends LatLng {
   accuracy?: number
   timestamp?: number
+  /** GPS course (° clockwise from north) and speed (m/s), when the phone reports them. */
+  heading?: number
+  speed?: number
 }
 
 export interface Progress {

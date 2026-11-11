@@ -10,6 +10,8 @@
 //   slowimg    delays every map image transfer by n ms (the simulator is faster than Bluetooth)
 //   perf       logs timings and bridge traffic to the console
 //   fail       requests to these hosts fail, e.g. fail=api.transitous.org (network failover)
+//   heading    fixed direction you face (°), turns the map like the compass would
+//   imu        logs the raw IMU reports of the glasses to the console
 
 import type { Target } from './bridge'
 import type { Fix } from './journey'
@@ -33,6 +35,11 @@ export function fastForward(): void {
   forwarded = true
   offset += (num('ff') || 0) * 60_000
 }
+
+const heading = num('heading')
+export const mockHeading = Number.isFinite(heading) ? heading : null
+
+export const logImu = params.has('imu')
 
 export const slowImageMs = num('slowimg') || 0
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error Node types are not installed; vitest runs this file in Node
 import { readFileSync } from 'node:fs'
-import { compass, computeView, metresPerPx, project, scaleBar, spreadApart } from './board-map'
+import { MAP_W, compass, computeView, metresPerPx, project, scaleBar, screenOf, spreadApart } from './board-map'
 import { decodeTile } from './mvt'
 
 describe('vector tile decoder', () => {
@@ -21,6 +21,29 @@ describe('map view', () => {
   const me = { lat: 47.3782, lng: 8.5402 }
   const near = { lat: 47.3785, lng: 8.5406 }
   const far = { lat: 47.3862, lng: 8.5402 }
+
+  it('turns the map so the direction you face points up', () => {
+    const east = { lat: 47.3782, lng: 8.55 }
+    const v = computeView({ me, stations: [east], selected: 0, heading: 90 })!
+    const [x, y] = screenOf(v)(...project(east))
+    const [mx, my] = screenOf(v)(...project(me))
+    expect(Math.abs(x - mx)).toBeLessThan(1)
+    expect(y).toBeLessThan(my)
+  })
+
+  it('keeps the zoom and both points in frame while you turn', () => {
+    const views = [0, 45, 90, 135].map((heading) => computeView({ me, stations: [far], selected: 0, heading })!)
+    for (const v of views) {
+      expect(v.k).toBeCloseTo(views[0].k)
+      for (const p of [me, far]) {
+        const [x, y] = screenOf(v)(...project(p))
+        expect(x).toBeGreaterThanOrEqual(0)
+        expect(x).toBeLessThanOrEqual(MAP_W)
+        expect(y).toBeGreaterThanOrEqual(0)
+        expect(y).toBeLessThanOrEqual(MAP_W)
+      }
+    }
+  })
 
   it('keeps a minimum span when the stop is right next to you', () => {
     const v = computeView({ me, stations: [near], selected: 0 })!

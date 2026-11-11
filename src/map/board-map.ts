@@ -24,6 +24,8 @@ export interface MapInput {
   platforms?: (MapPoint & { label: string })[]
   /** e.g. "2/6": which stop of the board the map shows, same as in the board header. */
   label?: string
+  /** Direction you face (° clockwise from north): the map is turned so it points up. */
+  heading?: number | null
 }
 
 // ---------- Web Mercator ----------
@@ -53,13 +55,16 @@ export interface View {
   /** Tile zoom to load and the tiles covering the view. */
   z: number
   tiles: [number, number][]
+  /** Map rotation (radians): the heading that points up, 0 = north up. */
+  rot: number
 }
 
 const MARGIN = 20
 const MIN_SPAN_M = 260
 const MAX_SPAN_M = 3000
 
-/** View that keeps you and the selected stop in frame, centred between both. */
+/** View that keeps you and the selected stop in frame, centred between both. Turned maps are
+ *  framed by distance from the centre, so turning around doesn't change the zoom. */
 export function computeView(input: MapInput): View | null {
   const station = input.stations[input.selected]
   const focus = [input.me, ...(input.platforms?.length ? input.platforms : [station])].filter((p): p is MapPoint => !!p)
@@ -70,20 +75,36 @@ export function computeView(input: MapInput): View | null {
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2
   const cy = (Math.min(...ys) + Math.max(...ys)) / 2
   const m16 = metresPerPx(focus[0].lat)
-  const spanPx = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
+  const turned = input.heading != null
+  const spanPx = turned
+    ? 2 * Math.max(...pts.map(([x, y]) => Math.hypot(x - cx, y - cy)))
+    : Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
   const spanM = Math.min(MAX_SPAN_M, Math.max(MIN_SPAN_M, (spanPx * m16 * MAP_W) / (MAP_W - 2 * MARGIN)))
   const k = (MAP_W * m16) / spanM
+  // A turned map shows the corners of a larger square, up to its diagonal
+  const cover = turned ? MAP_W * Math.SQRT2 : MAP_W
   // Coarser tiles when zoomed out, so at most 2×2 tiles cover the map
-  const z = TILE * k >= MAP_W ? 16 : TILE * 2 * k >= MAP_W ? 15 : 14
+  const z = TILE * k >= cover ? 16 : TILE * 2 * k >= cover ? 15 : 14
   const scale = 2 ** (16 - z)
-  const half = MAP_W / 2 / k
+  const half = cover / 2 / k
   const tx0 = Math.floor((cx - half) / scale / TILE)
   const tx1 = Math.floor((cx + half) / scale / TILE)
   const ty0 = Math.floor((cy - half) / scale / TILE)
   const ty1 = Math.floor((cy + half) / scale / TILE)
   const tiles: [number, number][] = []
   for (let x = tx0; x <= tx1; x++) for (let y = ty0; y <= ty1; y++) tiles.push([x, y])
-  return { cx, cy, k, mpp: m16 / k, z, tiles }
+  return { cx, cy, k, mpp: m16 / k, z, tiles, rot: turned ? ((input.heading! % 360) * Math.PI) / 180 : 0 }
+}
+
+/** Zoom-16 world pixel → canvas pixel, turned so the heading points up. */
+export function screenOf(view: View): (wx: number, wy: number) => [number, number] {
+  const cos = Math.cos(-view.rot)
+  const sin = Math.sin(-view.rot)
+  return (wx, wy) => {
+    const dx = (wx - view.cx) * view.k
+    const dy = (wy - view.cy) * view.k
+    return [dx * cos - dy * sin + MAP_W / 2, dx * sin + dy * cos + MAP_H / 2]
+  }
 }
 
 // ---------- Tiles ----------
@@ -149,6 +170,7 @@ const LABEL = '#c0c0c0'
 
 function drawStreets(ctx: Ctx, view: View, tiles: (Tile | null)[]) {
   const scale = 2 ** (16 - view.z)
+  const screen = screenOf(view)
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
   for (const kind of DRAW_ORDER) {
@@ -165,8 +187,7 @@ function drawStreets(ctx: Ctx, view: View, tiles: (Tile | null)[]) {
       const oy = ty * TILE * scale
       for (const points of tile.byKind.get(kind) ?? []) {
         for (let j = 0; j < points.length; j += 2) {
-          const px = (ox + points[j] * f - view.cx) * view.k + MAP_W / 2
-          const py = (oy + points[j + 1] * f - view.cy) * view.k + MAP_H / 2
+          const [px, py] = screen(ox + points[j] * f, oy + points[j + 1] * f)
           if (j === 0) ctx.moveTo(px, py)
           else ctx.lineTo(px, py)
         }
@@ -277,7 +298,8 @@ function nearest(me: MapPoint, points: MapPoint[]): MapPoint {
   return points.reduce((a, b) => (d(b) < d(a) ? b : a))
 }
 
-function drawMe(ctx: Ctx, me: NonNullable<MapInput['me']>, view: View, at: ToCanvas) {
+/** You: a dot, or on a turned map an arrow pointing up, the way you face. */
+function drawMe(ctx: Ctx, me: NonNullable<MapInput['me']>, view: View, at: ToCanvas, facing: boolean) {
   const [x, y] = at(me)
   const accuracyPx = (me.accuracy ?? 0) / view.mpp
   if (accuracyPx > 9) {
@@ -287,9 +309,49 @@ function drawMe(ctx: Ctx, me: NonNullable<MapInput['me']>, view: View, at: ToCan
     ctx.strokeStyle = '#6a6a6a'
     ctx.stroke()
   }
+  if (facing) {
+    ctx.beginPath()
+    ctx.moveTo(x, y - 8)
+    ctx.lineTo(x + 6, y + 6)
+    ctx.lineTo(x, y + 3)
+    ctx.lineTo(x - 6, y + 6)
+    ctx.closePath()
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = 4
+    ctx.strokeStyle = '#000'
+    ctx.stroke()
+    ctx.fillStyle = WHITE
+    ctx.fill()
+    return
+  }
   for (const [r, colour] of [[6.5, '#000'], [4.5, WHITE]] as const) {
     ctx.beginPath()
     ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fillStyle = colour
+    ctx.fill()
+  }
+}
+
+/** Compass needle in the top left corner: the white half points north. */
+function drawNorth(ctx: Ctx, rot: number) {
+  const cx = 12
+  const cy = 12
+  // North (0, -1) turned like the map
+  const nx = Math.sin(-rot)
+  const ny = -Math.cos(-rot)
+  ctx.beginPath()
+  ctx.arc(cx, cy, 10, 0, Math.PI * 2)
+  ctx.fillStyle = '#000'
+  ctx.fill()
+  ctx.lineWidth = 1
+  ctx.strokeStyle = '#6a6a6a'
+  ctx.stroke()
+  for (const [dir, colour] of [[1, WHITE], [-1, '#6a6a6a']] as const) {
+    ctx.beginPath()
+    ctx.moveTo(cx + nx * 8 * dir, cy + ny * 8 * dir)
+    ctx.lineTo(cx - ny * 3, cy + nx * 3)
+    ctx.lineTo(cx + ny * 3, cy - nx * 3)
+    ctx.closePath()
     ctx.fillStyle = colour
     ctx.fill()
   }
@@ -331,10 +393,8 @@ export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promi
   ctx.fillRect(0, 0, MAP_W, MAP_H)
   const view = computeView(input)
   if (!view) return
-  const at: ToCanvas = (p) => {
-    const [x, y] = project(p)
-    return [(x - view.cx) * view.k + MAP_W / 2, (y - view.cy) * view.k + MAP_H / 2]
-  }
+  const screen = screenOf(view)
+  const at: ToCanvas = (p) => screen(...project(p))
 
   drawStreets(ctx, view, await Promise.all(view.tiles.map(([x, y]) => loadTile(view.z, x, y))))
   drawOtherStops(ctx, input, at)
@@ -343,9 +403,11 @@ export async function drawMap(canvas: HTMLCanvasElement, input: MapInput): Promi
   if (stop && input.me) drawWayToStop(ctx, input.me, platforms ? nearest(input.me, platforms) : stop, at)
   if (platforms) drawPlatforms(ctx, platforms, at)
   else if (stop) drawSelectedStop(ctx, stop, at)
-  if (input.me) drawMe(ctx, input.me, view, at)
+  const turned = input.heading != null
+  if (input.me) drawMe(ctx, input.me, view, at, turned)
 
-  label(ctx, 'N↑', 4, 12, 'left', 'bold 11px sans-serif', LABEL)
+  if (turned) drawNorth(ctx, view.rot)
+  else label(ctx, 'N↑', 4, 12, 'left', 'bold 11px sans-serif', LABEL)
   // Required OpenStreetMap attribution at the map itself
   label(ctx, '© OSM', MAP_W - 4, 11, 'right', 'bold 9px sans-serif', '#9a9a9a')
   drawScaleBar(ctx, view)

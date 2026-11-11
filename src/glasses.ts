@@ -9,6 +9,7 @@ import {
   ImageContainerProperty,
   ImageRawDataUpdate,
   ImageRawDataUpdateResult,
+  ImuReportPace,
   ListContainerProperty,
   ListItemContainerProperty,
   OsEventTypeList,
@@ -39,7 +40,8 @@ import {
   type BoardRow,
 } from './format'
 import { buildTrip, distanceM, estimateProgress, type Fix, type Trip } from './journey'
-import { fastForward, mark, mockFix, mockTargets, slowImageMs, startDevHooks, now as clock } from './dev'
+import { fastForward, logImu, mark, mockFix, mockTargets, slowImageMs, startDevHooks, now as clock } from './dev'
+import { angleDiff, currentHeading, learnFromFix, startCompass } from './heading'
 import { HALF_W, LINE_H, dotX, renderProgressPngs } from './progress-image'
 
 type Mode = 'loading' | 'board' | 'targets' | 'connections' | 'transit' | 'confirmStop' | 'message'
@@ -85,9 +87,15 @@ const MAP_ID = MAPINFO_ID + 1
 const DEST_CHARS = 23
 const DEST_CHARS_MAP = 15
 /** Redraw the map when you moved this far (m)… */
-const MAP_REDRAW_M = 25
-/** …but at most this often: every image costs a slow Bluetooth transfer that delays all other updates. */
-const MAP_MIN_INTERVAL_MS = 15_000
+const MAP_REDRAW_M = 40
+/** …but at most this often: every image costs a slow Bluetooth transfer that delays all other
+ *  updates. Your position is the least urgent part of the map: the stop doesn't move. */
+const MAP_MIN_INTERVAL_MS = 30_000
+/** Turn the map when you turned this far (°)… */
+const MAP_TURN_DEG = 20
+/** …at most this often, so you can get your bearings while turning around. Each redraw also
+ *  brings your position up to date. */
+const MAP_TURN_INTERVAL_MS = 2500
 /** While swiping through stops, the map waits until you pause, so the Bluetooth link isn't busy
  *  with maps of stops you skip past. */
 const MAP_SWIPE_SETTLE_MS = 700
@@ -107,7 +115,14 @@ const WALK_M_PER_MIN = 75
 /** In automatic mode, try the next network when the closest stop is further than this (m). */
 const FALLBACK_M = 1500
 
-const toFix = (l: AppLocation): Fix => ({ lat: l.latitude, lng: l.longitude, accuracy: l.accuracy, timestamp: l.timestamp ?? clock() })
+const toFix = (l: AppLocation): Fix => ({
+  lat: l.latitude,
+  lng: l.longitude,
+  accuracy: l.accuracy,
+  timestamp: l.timestamp ?? clock(),
+  heading: l.heading,
+  speed: l.speed,
+})
 
 interface ConnectionOption {
   trip: Trip
@@ -152,6 +167,8 @@ export class GlassesApp {
   private boardWithMap = false
   private mapKey = ''
   private mapFix: Fix | null = null
+  /** Heading the map on screen is turned to; null: north up. */
+  private mapHeading: number | null = null
   private mapBusy = false
   private mapPending = false
   private mapSentAt = 0
@@ -235,10 +252,13 @@ export class GlassesApp {
       this.bridge.onAppLocationChanged((l) => {
         if (mockFix) return
         this.fix = toFix(l)
+        learnFromFix(this.fix, clock())
         void this.onFix().catch(() => undefined)
       }),
     )
     void this.startLocation()
+    this.unsubscribers.push(startCompass(() => void this.onHeading()))
+    if (logImu) void this.bridge.imuControl(true, ImuReportPace.P500).catch(() => false)
     const firstFix = mockFix ? { ...mockFix, timestamp: clock() } : await this.quickFix()
     if (firstFix) {
       this.fix = firstFix
@@ -348,6 +368,8 @@ export class GlassesApp {
     } else if (this.mode === 'board' && this.boardWithMap !== settings.map) {
       this.mode = 'loading' // forces a rebuild with the other layout
       await this.renderBoard()
+    } else if (this.mode === 'board' && this.boardWithMap) {
+      await this.sendMap() // turned or back to north up
     }
   }
 
@@ -522,6 +544,16 @@ export class GlassesApp {
 
   // ---------- Departure board ----------
 
+  /** The compass turned (throttled in heading.ts): turn the map if it's on screen. */
+  private async onHeading() {
+    if (this.foreground && this.mode === 'board' && this.boardWithMap) await this.sendMap()
+  }
+
+  /** Direction the map should face, null for north up. */
+  private mapHeadingNow(): number | null {
+    return this.settings.rotate ? (currentHeading(this.fix, clock())?.deg ?? null) : null
+  }
+
   private async onFix() {
     if (!this.fix) return
     if (this.mode === 'transit') return this.renderTransit()
@@ -670,7 +702,12 @@ export class GlassesApp {
     const goodFix = !!this.fix && (this.fix.accuracy ?? 0) <= MAP_MAX_ACCURACY_M
     const moved = goodFix && (!this.mapFix || distanceM(this.mapFix, this.fix!) >= MAP_REDRAW_M)
     const due = clock() - this.mapSentAt >= MAP_MIN_INTERVAL_MS
-    if (!station || (!force && key === this.mapKey && !(moved && due))) return
+    const heading = this.mapHeadingNow()
+    const turned =
+      (heading == null) !== (this.mapHeading == null) ||
+      (heading != null && this.mapHeading != null && angleDiff(heading, this.mapHeading) >= MAP_TURN_DEG)
+    const turnDue = clock() - this.mapSentAt >= MAP_TURN_INTERVAL_MS
+    if (!station || (!force && key === this.mapKey && !(moved && due) && !(turned && turnDue))) return
     const settle = this.swipedAt + MAP_SWIPE_SETTLE_MS - clock()
     if (settle > 0) {
       clearTimeout(this.mapTimer)
@@ -691,6 +728,8 @@ export class GlassesApp {
     this.mapBusy = true
     this.mapPending = false
     const fix = this.fix
+    // Latest direction: it may have changed while waiting for the platforms
+    const facing = this.mapHeadingNow()
     let sent = false
     try {
       const png = await renderMapPng({
@@ -701,6 +740,7 @@ export class GlassesApp {
         selected: this.stationIdx,
         platforms: this.platformInfo(clock())?.markers,
         label: this.stations.length > 1 ? `${this.stationIdx + 1}/${this.stations.length}` : '',
+        heading: facing,
       })
       if (this.mode !== 'board' || !this.boardWithMap) return
       // Page changed while waiting: the next board page sends its own map
@@ -708,6 +748,7 @@ export class GlassesApp {
       if (!sent) return
       this.mapKey = key
       this.mapFix = fix
+      this.mapHeading = facing
       this.mapSentAt = clock()
     } catch {
       this.mapKey = '' // retried on the next tick
@@ -997,6 +1038,10 @@ export class GlassesApp {
   private async onEvent(e: EvenHubEvent) {
     const sys = e.sysEvent
     if (sys) {
+      if (sys.eventType === OsEventTypeList.IMU_DATA_REPORT) {
+        if (logImu) console.log('[imu]', sys.imuData?.x, sys.imuData?.y, sys.imuData?.z)
+        return
+      }
       const type = sys.eventType ?? OsEventTypeList.CLICK_EVENT
       switch (type) {
         case OsEventTypeList.FOREGROUND_ENTER_EVENT:

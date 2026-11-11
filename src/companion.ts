@@ -5,6 +5,7 @@ import { loadSettings, loadTargets, saveSettings, saveTargets, type Settings, ty
 import { DEFAULT_NETWORK, NETWORKS, getNetwork } from './networks'
 import { CREDITS } from './credits'
 import { hhmm } from './format'
+import { compassNeedsPermission, requestCompassPermission } from './heading'
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!
 
@@ -42,6 +43,8 @@ export async function mountCompanion(
   const saveBtn = $<HTMLButtonElement>('#save')
   const networkSel = $<HTMLSelectElement>('#network')
   const mapToggle = $<HTMLInputElement>('#map')
+  const rotateToggle = $<HTMLInputElement>('#rotate')
+  const compassBtn = $<HTMLButtonElement>('#compass')
   const searchNetwork = $<HTMLSelectElement>('#search-network')
 
   const options = (withAuto: boolean) =>
@@ -52,11 +55,12 @@ export async function mountCompanion(
   networkSel.innerHTML = options(true)
   networkSel.value = settings.network
   mapToggle.checked = settings.map
+  rotateToggle.checked = settings.rotate
   searchNetwork.innerHTML = options(false)
   searchNetwork.value = settings.network === 'auto' ? DEFAULT_NETWORK : settings.network
 
   const persistSettings = async () => {
-    settings = { network: networkSel.value, map: mapToggle.checked }
+    settings = { network: networkSel.value, map: mapToggle.checked, rotate: rotateToggle.checked }
     await saveSettings(settings)
     onSettings(settings)
   }
@@ -65,6 +69,16 @@ export async function mountCompanion(
     void persistSettings()
   })
   mapToggle.addEventListener('change', () => void persistSettings())
+  rotateToggle.addEventListener('change', () => void persistSettings())
+  // iOS: the compass needs a tap on this page; without it the map turns by the GPS course only
+  compassBtn.hidden = !(settings.rotate && compassNeedsPermission())
+  compassBtn.addEventListener('click', () => {
+    void requestCompassPermission().then((ok) => {
+      compassBtn.hidden = ok
+      if (!ok) compassBtn.textContent = 'Compass not allowed · tap to retry'
+    })
+  })
+  rotateToggle.addEventListener('change', () => (compassBtn.hidden = !(rotateToggle.checked && compassNeedsPermission())))
 
   const persist = async () => {
     await saveTargets(targets)

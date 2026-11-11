@@ -26,6 +26,7 @@ Bluetooth.
 | `format.ts` | All text shown on the glasses (board rows, steps, next action). |
 | `line-layout.ts`, `progress-image.ts` | Journey line: schematic layout with minimum segment widths, drawn on a canvas, split into two 288 px images. |
 | `map/` | Board map: Web Mercator view, vector tile decoder (`mvt.ts`), drawing. |
+| `heading.ts` | Which way you face, for the turning map: phone compass in your hand, the phone axis learnt from the GPS course while walking when it's in a pocket, else the GPS course. |
 | `credits.ts` | Data sources, services and licences shown on the phone page. |
 | `http.ts`, `canvas.ts` | Fetch with timeout; canvas to PNG bytes. |
 | `dev.ts` | Test parameters for the dev server and simulator (ignored in production builds). |
@@ -39,6 +40,8 @@ one at a time; an image transfer takes seconds on real hardware. Hence:
 - distances are rounded so GPS jitter doesn't change the text;
 - images go through a low-priority lane of the bridge queue, so text and taps never wait behind them;
 - map and journey line are redrawn only when they changed, throttled, latest state wins;
+- the map is redrawn quickly when you turn (20°, every 2.5 s at most) but rarely for your
+  position (40 m, every 30 s at most);
 - the first page is built from local copies only, so the Even app's "app starting" notice
   disappears without waiting for storage, GPS or the network.
 

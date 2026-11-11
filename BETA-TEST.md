@@ -62,7 +62,12 @@ Departure board (start from the **glasses menu**)
 - [ ] No scrollbar on the right of any column (text fits).
 - [ ] Map: hollow square = selected stop, filled dot = you, small rings = other nearby stops, dotted line between you and the stop.
 - [ ] Swiping: text under the map reads "Map updating…" until the new map arrives, then the walking time again; the stop number in the map corner (e.g. 2/6) matches the header.
-- [ ] Map follows when you walk (redraws every ~25 m, at most every 15 s) and when you swipe to another stop; "n m NE · n' walk" under it is right.
+- [ ] Map follows when you walk (redraws every ~40 m, at most every 30 s) and when you swipe to another stop; "n m NE · n' walk" under it is right.
+- [ ] Map turns with you: phone held flat in your hand, turn on the spot → map turns within a few seconds (steps of 20° or more), your arrow points up, the needle top left points north.
+- [ ] Phone in the pocket: walk ~20 m, stop, turn on the spot → map turns with your body (learnt from the walk). Phone moved in the pocket → right again after a few steps.
+- [ ] Phone locked / screen off: does the map still turn? (Sensor events may stop; then it follows the GPS course while walking and returns to north up a minute after you stop.)
+- [ ] iPhone: "Allow compass access" on the phone page asks for permission. Even Hub for iOS may block sensors entirely; then only the GPS course turns the map.
+- [ ] "Turn the map with the compass" off → map is north up again.
 - [ ] Streets are readable on the glasses (not too bright/dim). Map without streets = tile download failed (still shows stops and you).
 
 Germany (needs a German location, or the network set to "Automatic" or "International")
